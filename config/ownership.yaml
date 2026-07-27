@@ -1,0 +1,71 @@
+# Ownership and business criticality.
+#
+# Starts empty on purpose. Everything else frogscope derives is observable from a
+# scan; who owns a host is not, and guessing it would be worse than leaving the
+# cut collapsed to `zone`.
+#
+# Fill this in and the executive page gains a "by business unit" breakdown, and
+# findings can be routed. Until then the Executive view says plainly that it is
+# grouping by zone because no ownership register exists — better than presenting
+# an invented split as fact.
+#
+# Rules are evaluated in order; the first match wins, so put specific patterns
+# above general ones.
+
+# `match` is a regex tested against the normalised (lowercased) hostname.
+rules: []
+
+# Worked example — delete these comments and uncomment to use:
+#
+# rules:
+#   - match: '^(adm|admin)\.iem\.'
+#     owner: Platform Engineering
+#     business_unit: Technology
+#     criticality: tier1
+#     contact: platform-eng@example.com
+#
+#   - match: '\.iem\.'
+#     owner: Environment Management
+#     business_unit: Technology
+#     criticality: tier2
+#
+#   - match: '^(vpn|sslvpn)\.'
+#     owner: Network Operations
+#     business_unit: Technology
+#     criticality: tier1
+#     note: Remote access. Outage blocks staff.
+#
+#   - match: 'treasury|payments|settlement'
+#     owner: Treasury Technology
+#     business_unit: Markets
+#     criticality: tier1
+#
+#   - match: '.*'
+#     owner: Unassigned
+#     business_unit: Unassigned
+#     criticality: tier3
+
+# Criticality tiers, referenced by config/rules.yaml's MOD_TIER1 modifier. A
+# tier1 host scores higher for the same technical finding, because the business
+# impact is larger.
+tiers:
+  tier1:
+    label: Business critical
+    description: Revenue-affecting, or an outage is immediately visible to clients.
+    score_multiplier: 1.30
+  tier2:
+    label: Important
+    description: Supports delivery; degradation is noticed within a day.
+    score_multiplier: 1.00
+  tier3:
+    label: Standard
+    description: Everything else.
+    score_multiplier: 0.90
+
+# Shown in the UI when `rules` is empty, so the gap is explicit rather than
+# looking like an empty chart.
+unconfigured_note: >
+  No ownership register is configured, so findings are grouped by DNS zone
+  instead. Zone is a reasonable proxy for a team in most estates, but it cannot
+  tell you who to send a ticket to. Add rules to config/ownership.yaml to get a
+  by-business-unit cut and per-owner routing.

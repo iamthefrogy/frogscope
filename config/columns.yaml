@@ -1,0 +1,1187 @@
+# Column catalogue — the single source of truth for the grid, the CSV export,
+# the drawer field order, AND the API's filter/sort whitelist. A column name
+# that is not in here can never reach SQL.
+#
+#   type:   text host enum int float bool url list datetime
+#   filter: search multiselect range bool tokens daterange none
+#   group:  identity response redirect infra dns fingerprint quality provenance
+#
+# `default_visible: false` still means filterable and exportable — just not shown
+# until the user enables it in the column picker. Any column whose fill rate is
+# 0% for the selected run is auto-hidden regardless of this setting.
+
+groups:
+  identity:    {label: Identity,      order: 1}
+  response:    {label: Response,      order: 2}
+  redirect:    {label: Redirect,      order: 3}
+  infra:       {label: Edge & hosting, order: 4}
+  dns:         {label: DNS,           order: 5}
+  fingerprint: {label: Technology,    order: 6}
+  quality:     {label: Data quality,  order: 8}
+  risk:        {label: Risk,           order: 7}
+  provenance:  {label: Provenance,    order: 9}
+  exposure:    {label: What is exposed, order: 10}
+  network:     {label: Network & certificates, order: 11}
+
+columns:
+  # ── Identity ───────────────────────────────────────────────────────────────
+  - key: endpoint_key
+    label: Endpoint
+    group: identity
+    type: text
+    filter: search
+    width: 260
+    default_visible: true
+    description: Stable identity for diffing — lowercased host plus port.
+  - key: host_display
+    label: Host
+    group: identity
+    type: host
+    filter: search
+    width: 240
+    default_visible: true
+    description: Hostname in its originally observed casing.
+  - key: host
+    label: Host (normalised)
+    group: identity
+    type: host
+    filter: search
+    width: 240
+    default_visible: false
+    description: Lowercased, trailing-dot-stripped, punycoded. The diff key.
+  - key: port
+    label: Port
+    group: identity
+    type: int
+    filter: multiselect
+    width: 80
+    align: right
+    default_visible: true
+  - key: scheme
+    label: Scheme
+    group: identity
+    type: enum
+    filter: multiselect
+    width: 80
+    default_visible: true
+  - key: port_category
+    label: Port class
+    group: identity
+    type: enum
+    filter: multiselect
+    width: 150
+    default_visible: true
+    description: From config/ports.yaml. Distinguishes real services from Cloudflare aliases.
+  - key: env
+    label: Environment
+    exec_label: Environment
+    group: identity
+    type: enum
+    filter: multiselect
+    width: 120
+    default_visible: true
+    description: Inferred from whole hostname labels, never substrings.
+  - key: env_source
+    label: Env evidence
+    group: identity
+    type: text
+    filter: search
+    width: 120
+    default_visible: false
+    description: Which hostname token produced the environment classification.
+  - key: zone
+    label: Zone
+    group: identity
+    type: enum
+    filter: multiselect
+    width: 200
+    default_visible: true
+    description: Hostname with its leftmost label removed; groups related assets.
+  - key: registrable_domain
+    label: Registrable domain
+    group: identity
+    type: enum
+    filter: multiselect
+    width: 180
+    default_visible: false
+  - key: host_depth
+    label: Label depth
+    group: identity
+    type: int
+    filter: range
+    width: 90
+    align: right
+    default_visible: false
+
+  # ── Response ───────────────────────────────────────────────────────────────
+  - key: response_class
+    label: Response class
+    exec_label: What it is
+    group: response
+    type: enum
+    filter: multiselect
+    width: 170
+    default_visible: true
+    description: >
+      The single most useful field. Separates real content from WAF blocks,
+      scan artefacts, broken origins, and auth walls.
+  - key: status_code
+    label: Status
+    group: response
+    type: int
+    filter: multiselect
+    width: 80
+    align: right
+    default_visible: true
+  - key: status_class
+    label: Status class
+    group: response
+    type: enum
+    filter: multiselect
+    width: 110
+    default_visible: false
+  - key: title
+    label: Title
+    group: response
+    type: text
+    filter: search
+    width: 300
+    default_visible: true
+  - key: title_class
+    label: Title class
+    group: response
+    type: enum
+    filter: multiselect
+    width: 180
+    default_visible: true
+  - key: serves_content
+    label: Serving
+    exec_label: Live
+    group: response
+    type: bool
+    filter: bool
+    width: 90
+    default_visible: true
+    description: Genuinely returning an application response, excluding artefacts and blocks.
+  - key: scan_artifact
+    label: Scan artefact
+    group: response
+    type: bool
+    filter: bool
+    width: 110
+    default_visible: false
+    description: >
+      httpx probed a TLS-only port over cleartext. The 400 is the server being
+      correct. Excluded from all counts and scoring.
+  - key: nonstd_port
+    label: Non-standard port
+    group: identity
+    type: bool
+    filter: bool
+    width: 130
+    default_visible: false
+    description: >
+      Outside ports 80 and 443. Only meaningful alongside cf_alias_port, since
+      most such ports on a Cloudflare host are aliases rather than services.
+  - key: cf_alias_port
+    label: CF alias port
+    group: response
+    type: bool
+    filter: bool
+    width: 110
+    default_visible: false
+    description: A Cloudflare proxy alias of the same origin site, not extra surface.
+  - key: waf_blocked
+    label: WAF blocked
+    group: response
+    type: bool
+    filter: bool
+    width: 100
+    default_visible: false
+  - key: content_type
+    label: Content type
+    group: response
+    type: enum
+    filter: multiselect
+    width: 130
+    default_visible: false
+  - key: content_length
+    label: Length
+    group: response
+    type: int
+    filter: range
+    width: 100
+    align: right
+    default_visible: false
+  - key: words
+    label: Words
+    group: response
+    type: int
+    filter: range
+    width: 80
+    align: right
+    default_visible: false
+  - key: lines
+    label: Lines
+    group: response
+    type: int
+    filter: range
+    width: 80
+    align: right
+    default_visible: false
+  - key: response_ms
+    label: Response (ms)
+    group: response
+    type: float
+    filter: range
+    width: 110
+    align: right
+    default_visible: false
+    format: ms
+  - key: content_sig
+    label: Content signature
+    group: response
+    type: text
+    filter: search
+    width: 130
+    default_visible: false
+    description: Hash of status, size, and title — groups template-identical endpoints.
+  - key: content_cluster_size
+    label: Identical peers
+    group: response
+    type: int
+    filter: range
+    width: 110
+    align: right
+    default_visible: false
+
+  # ── Redirect ───────────────────────────────────────────────────────────────
+  - key: final_url
+    label: Final URL
+    group: redirect
+    type: url
+    filter: search
+    width: 320
+    default_visible: false
+  - key: final_host
+    label: Final host
+    group: redirect
+    type: host
+    filter: search
+    width: 220
+    default_visible: false
+  - key: redirect_offsite
+    label: Redirects offsite
+    group: redirect
+    type: bool
+    filter: bool
+    width: 130
+    default_visible: false
+  - key: redirect_chain_len
+    label: Redirect hops
+    group: redirect
+    type: int
+    filter: range
+    width: 110
+    align: right
+    default_visible: false
+  - key: redirects_to_https
+    label: Upgrades to HTTPS
+    group: redirect
+    type: bool
+    filter: bool
+    width: 140
+    default_visible: false
+  - key: no_tls_redirect
+    label: Cleartext, no upgrade
+    group: redirect
+    type: bool
+    filter: bool
+    width: 150
+    default_visible: false
+    description: Serves content over HTTP and never redirects to HTTPS.
+  - key: auth_surface_type
+    label: Auth surface
+    exec_label: Login type
+    group: redirect
+    type: enum
+    filter: multiselect
+    width: 140
+    default_visible: true
+  - key: federated_auth
+    label: Federated
+    group: redirect
+    type: bool
+    filter: bool
+    width: 100
+    default_visible: false
+    description: Delegates to an external identity provider. This is good.
+  - key: remote_access_exposed
+    label: Remote access
+    group: redirect
+    type: bool
+    filter: bool
+    width: 120
+    default_visible: false
+  - key: mgmt_surface
+    label: Mgmt console
+    group: redirect
+    type: bool
+    filter: bool
+    width: 120
+    default_visible: false
+
+  # ── Edge & hosting ─────────────────────────────────────────────────────────
+  - key: cdn_name
+    label: CDN / WAF
+    exec_label: Protection
+    group: infra
+    type: enum
+    filter: multiselect
+    width: 120
+    default_visible: true
+  - key: cdn_type
+    label: Edge type
+    group: infra
+    type: enum
+    filter: multiselect
+    width: 100
+    default_visible: false
+  - key: hosting_provider
+    label: Hosting provider
+    group: infra
+    type: enum
+    filter: multiselect
+    width: 180
+    default_visible: true
+    description: Resolved from the CNAME chain, then the CDN field, then the IP.
+  - key: hosting_kind
+    label: Hosting kind
+    group: infra
+    type: enum
+    filter: multiselect
+    width: 120
+    default_visible: false
+  - key: edge_provider
+    label: Edge provider
+    group: infra
+    type: enum
+    filter: multiselect
+    width: 170
+    default_visible: false
+    description: >
+      The outermost provider in the CNAME chain — what the internet actually
+      connects to, as opposed to what hosts the application.
+  - key: edge_kind
+    label: Edge kind
+    group: infra
+    type: enum
+    filter: multiselect
+    width: 110
+    default_visible: false
+  - key: chain_providers
+    label: Provider chain
+    group: infra
+    type: list
+    filter: tokens
+    width: 240
+    default_visible: false
+    description: Every provider the traffic passes through — the supply chain.
+  - key: origin_exposed
+    label: Origin exposed
+    exec_label: Reached directly
+    group: infra
+    type: bool
+    filter: bool
+    width: 130
+    default_visible: true
+    description: >
+      Serving content with no managed intermediary at all — the internet appears
+      to reach a server we run directly.
+  - key: no_waf
+    label: No WAF
+    exec_label: No WAF
+    group: infra
+    type: bool
+    filter: bool
+    width: 100
+    default_visible: true
+    description: >
+      Serving content with no WAF or CDN inspecting the traffic. Broader than
+      origin_exposed, which also requires the absence of any proxy or platform.
+  - key: waf_protected
+    label: WAF protected
+    group: infra
+    type: bool
+    filter: bool
+    width: 120
+    default_visible: false
+  - key: behind_proxy
+    label: Behind a proxy
+    group: infra
+    type: bool
+    filter: bool
+    width: 120
+    default_visible: false
+    description: Traffic passes through some managed platform, CDN, or proxy.
+  - key: azure_app_proxy
+    label: Entra App Proxy
+    group: infra
+    type: bool
+    filter: bool
+    width: 130
+    default_visible: false
+    description: An internal application deliberately published to the internet.
+  - key: origin_health
+    label: Origin health
+    group: infra
+    type: enum
+    filter: multiselect
+    width: 130
+    default_visible: false
+    description: Decoded from Cloudflare 5xx codes.
+  - key: cf_error_code
+    label: CF error
+    group: infra
+    type: int
+    filter: multiselect
+    width: 90
+    align: right
+    default_visible: false
+  - key: third_party_dependency
+    label: Third party
+    group: infra
+    type: enum
+    filter: multiselect
+    width: 110
+    default_visible: false
+  - key: defence_layers
+    label: Defence layers
+    group: infra
+    type: int
+    filter: range
+    width: 120
+    align: right
+    default_visible: false
+    description: How many of CDN/WAF, authentication, and TLS are present (0-3).
+  - key: unprotected
+    label: Unprotected
+    group: infra
+    type: bool
+    filter: bool
+    width: 110
+    default_visible: false
+    description: Serving content with none of CDN/WAF, auth, or TLS.
+
+  # ── DNS ────────────────────────────────────────────────────────────────────
+  - key: host_ip
+    label: IP
+    group: dns
+    type: text
+    filter: search
+    width: 140
+    default_visible: true
+  - key: a
+    label: A records
+    group: dns
+    type: list
+    filter: tokens
+    width: 180
+    default_visible: false
+  - key: aaaa
+    label: AAAA records
+    group: dns
+    type: list
+    filter: tokens
+    width: 180
+    default_visible: false
+  - key: cname
+    label: CNAME chain
+    group: dns
+    type: list
+    filter: tokens
+    width: 260
+    default_visible: false
+  - key: cname_final
+    label: CNAME target
+    group: dns
+    type: text
+    filter: search
+    width: 240
+    default_visible: false
+  - key: ipv6_enabled
+    label: IPv6
+    group: dns
+    type: bool
+    filter: bool
+    width: 80
+    default_visible: false
+  - key: dns_multi_a
+    label: Multiple A
+    group: dns
+    type: bool
+    filter: bool
+    width: 100
+    default_visible: false
+  - key: ip_cluster_size
+    label: Hosts on this IP
+    group: dns
+    type: int
+    filter: range
+    width: 130
+    align: right
+    default_visible: false
+    description: Blast radius — how many hosts share this address.
+  - key: resolvers
+    label: Resolvers
+    group: dns
+    type: list
+    filter: tokens
+    width: 180
+    default_visible: false
+
+  # ── Technology ─────────────────────────────────────────────────────────────
+  - key: webserver
+    label: Web server
+    group: fingerprint
+    type: enum
+    filter: multiselect
+    width: 160
+    default_visible: true
+  - key: webserver_family
+    label: Server family
+    group: fingerprint
+    type: enum
+    filter: multiselect
+    width: 130
+    default_visible: false
+  - key: webserver_version
+    label: Server version
+    group: fingerprint
+    type: text
+    filter: search
+    width: 120
+    default_visible: false
+  - key: version_disclosure
+    label: Version disclosed
+    group: fingerprint
+    type: bool
+    filter: bool
+    width: 140
+    default_visible: false
+  - key: tech
+    label: Technologies
+    group: fingerprint
+    type: list
+    filter: tokens
+    width: 280
+    default_visible: true
+  - key: tech_count
+    label: Tech count
+    group: fingerprint
+    type: int
+    filter: range
+    width: 100
+    align: right
+    default_visible: false
+  - key: cpe_products
+    label: CPE products
+    group: fingerprint
+    type: list
+    filter: tokens
+    width: 240
+    default_visible: false
+  - key: is_wordpress
+    label: WordPress
+    group: fingerprint
+    type: bool
+    filter: bool
+    width: 100
+    default_visible: false
+  - key: wp_plugins
+    label: WP plugins
+    group: fingerprint
+    type: list
+    filter: tokens
+    width: 220
+    default_visible: false
+  - key: api_surface
+    label: API surface
+    group: fingerprint
+    type: bool
+    filter: bool
+    width: 110
+    default_visible: false
+
+  # ── Risk ───────────────────────────────────────────────────────────────────
+  - key: risk_score
+    label: Risk score
+    exec_label: Risk
+    group: risk
+    type: int
+    filter: range
+    width: 100
+    align: right
+    default_visible: true
+    description: 0-100 from config/rules.yaml. The drawer shows the full trace.
+  - key: risk_band
+    label: Risk band
+    exec_label: Risk level
+    group: risk
+    type: enum
+    filter: multiselect
+    width: 110
+    default_visible: true
+    description: Banded risk score for this endpoint overall.
+  - key: worst_severity
+    label: Worst issue
+    group: risk
+    type: enum
+    filter: multiselect
+    width: 110
+    default_visible: true
+    description: >
+      Severity of the worst single finding here. Deliberately separate from the
+      band: a WAF-protected host running end-of-life software has a modest band
+      and a critical worst issue, and both are true.
+  - key: finding_count
+    label: Findings
+    group: risk
+    type: int
+    filter: range
+    width: 90
+    align: right
+    default_visible: true
+  - key: top_finding
+    label: Top finding
+    group: risk
+    type: text
+    filter: search
+    width: 240
+    default_visible: true
+  - key: risk_mitigated
+    label: Mitigated
+    group: risk
+    type: bool
+    filter: bool
+    width: 100
+    default_visible: false
+    description: A WAF, authentication, or alias-port modifier reduced this score.
+  - key: risk_excluded
+    label: Not scored
+    group: risk
+    type: bool
+    filter: bool
+    width: 100
+    default_visible: false
+    description: Excluded from scoring — a scan artefact, not a real finding.
+  - key: exposure
+    label: Exposure
+    group: risk
+    type: int
+    filter: range
+    width: 90
+    align: right
+    default_visible: false
+  - key: hygiene
+    label: Hygiene
+    group: risk
+    type: int
+    filter: range
+    width: 90
+    align: right
+    default_visible: false
+  - key: sensitivity
+    label: Sensitivity
+    group: risk
+    type: int
+    filter: range
+    width: 100
+    align: right
+    default_visible: false
+  - key: risk_confidence
+    label: Data confidence
+    group: risk
+    type: enum
+    filter: multiselect
+    width: 120
+    default_visible: false
+    description: How much of the picture this scan actually covered.
+  - key: takeover_grade
+    label: Takeover candidate
+    group: risk
+    type: enum
+    filter: multiselect
+    width: 140
+    default_visible: false
+    description: Candidate only — never confirmed without the opt-in verify step.
+  - key: takeover_provider
+    label: Takeover provider
+    group: risk
+    type: enum
+    filter: multiselect
+    width: 160
+    default_visible: false
+  - key: eol_count
+    label: EOL components
+    group: risk
+    type: int
+    filter: range
+    width: 120
+    align: right
+    default_visible: false
+  - key: eol_worst_severity
+    label: EOL severity
+    group: risk
+    type: enum
+    filter: multiselect
+    width: 110
+    default_visible: false
+  - key: eol_years_past
+    label: Years unsupported
+    group: risk
+    type: float
+    filter: range
+    width: 130
+    align: right
+    default_visible: false
+  - key: outdated_count
+    label: Outdated components
+    group: risk
+    type: int
+    filter: range
+    width: 140
+    align: right
+    default_visible: false
+  - key: vuln_family_count
+    label: Exploit-history products
+    group: risk
+    type: int
+    filter: range
+    width: 150
+    align: right
+    default_visible: false
+
+  # ── Data quality ───────────────────────────────────────────────────────────
+  - key: probe_count
+    label: Probes
+    group: quality
+    type: int
+    filter: range
+    width: 80
+    align: right
+    default_visible: false
+    description: How many source rows collapsed into this endpoint.
+  - key: intra_run_inconsistent
+    label: Inconsistent probes
+    group: quality
+    type: bool
+    filter: bool
+    width: 150
+    default_visible: false
+    description: Repeat probes within one scan disagreed on a meaningful field.
+  - key: scheme_conflict
+    label: Scheme conflict
+    group: quality
+    type: bool
+    filter: bool
+    width: 130
+    default_visible: false
+
+  # ── Provenance ─────────────────────────────────────────────────────────────
+  - key: scanned_at
+    label: Probed at
+    group: provenance
+    type: datetime
+    filter: daterange
+    width: 170
+    default_visible: false
+
+# Column presets offered in the picker.
+  # ── Passive product identification (config/fingerprints.yaml) ──────────────
+  # These say WHAT was identified. Whether it matters is decided by rules.yaml.
+  - key: panel_product
+    label: Product
+    group: exposure
+    type: text
+    filter: search
+    width: 180
+    default_visible: true
+    description: >
+      Product identified from the page title, technology, CPE, favicon, or
+      response body — never by requesting a path. A panel at /admin on a host
+      whose root page is a marketing site will not appear here.
+  - key: panel_group
+    label: Console kind
+    group: exposure
+    type: enum
+    filter: multiselect
+    width: 130
+    default_visible: true
+    description: >
+      What authority the product carries: ci_cd and infra_console can run code or
+      control servers, monitoring and dev_tool mostly leak structure. Grouped this
+      way because it is what a reviewer acts on.
+  - key: panel_exposure
+    label: Console severity
+    group: exposure
+    type: enum
+    filter: multiselect
+    width: 130
+    default_visible: false
+  - key: panel_confidence
+    label: Match confidence
+    group: exposure
+    type: enum
+    filter: multiselect
+    width: 130
+    default_visible: false
+    description: >
+      Confidence in the identification, separate from how bad the exposure is. A
+      product-specific string is `confirmed`; a generic word other products also
+      use is `possible`.
+  - key: panel_count
+    label: Products matched
+    group: exposure
+    type: int
+    filter: range
+    width: 100
+    default_visible: false
+  - key: is_default_page
+    label: Default page
+    group: exposure
+    type: bool
+    filter: bool
+    width: 110
+    default_visible: false
+    description: >
+      Still serving the out-of-the-box page, so nobody finished configuring the
+      host — which usually means nobody is patching it either.
+  - key: default_page_product
+    label: Default page product
+    group: exposure
+    type: text
+    filter: search
+    width: 150
+    default_visible: false
+  - key: disclosure_count
+    label: Disclosures
+    group: exposure
+    type: int
+    filter: range
+    width: 100
+    default_visible: false
+  - key: disclosure_worst
+    label: Worst disclosure
+    group: exposure
+    type: enum
+    filter: multiselect
+    width: 130
+    default_visible: true
+    description: >
+      Directory listings, stack traces, phpinfo, or credential-shaped strings in
+      the response. Only what a root-page response reveals; anything needing a
+      path request is out of scope by design.
+  - key: disclosure_ids
+    label: Disclosure checks
+    group: exposure
+    type: array
+    filter: tokens
+    width: 180
+    default_visible: false
+  - key: fingerprint_count
+    label: Fingerprint matches
+    group: exposure
+    type: int
+    filter: range
+    width: 110
+    default_visible: false
+
+  # ── Network & certificates (v2: dnsx / mapcidr / tlsx correlation) ─────────
+  # Empty on every run until a scan opts into "Correlate assets" — the
+  # 0%-fill auto-hide already handles that, no default_visible tuning needed
+  # beyond what's set here.
+  - key: cidr
+    label: Address block
+    group: network
+    type: enum
+    filter: multiselect
+    width: 160
+    default_visible: false
+    description: The CIDR block this IP falls in, from a scan-time CIDR target or expansion.
+  - key: cidr_prefix_len
+    label: Block size (/n)
+    group: network
+    type: int
+    filter: range
+    width: 100
+    align: right
+    default_visible: false
+  - key: ip_version
+    label: IP version
+    group: network
+    type: enum
+    filter: multiselect
+    width: 90
+    default_visible: false
+  - key: ptr_host
+    label: Reverse DNS
+    group: network
+    type: text
+    filter: search
+    width: 220
+    default_visible: false
+    description: The PTR name this address answers to.
+  - key: ptr_missing
+    label: No reverse DNS
+    group: network
+    type: bool
+    filter: bool
+    width: 120
+    default_visible: false
+    description: Normal for CDN/anycast ranges — check cdn_name before flagging this.
+  - key: ptr_mismatch
+    label: Reverse DNS mismatch
+    group: network
+    type: bool
+    filter: bool
+    width: 150
+    default_visible: false
+    description: Answers to a different name than this hostname — often a stale record after a migration.
+  - key: ip_hostname_count
+    label: Hostnames on this IP
+    group: network
+    type: int
+    filter: range
+    width: 140
+    align: right
+    default_visible: false
+    description: Our own hostnames sharing this address (see ip_cluster_size for the legacy version of this count).
+  - key: ip_foreign_domain_count
+    label: Foreign domains on this IP
+    group: network
+    type: int
+    filter: range
+    width: 170
+    align: right
+    default_visible: false
+    description: Registrable domains on this address that we do not own — shared/neighbour hosting.
+  - key: in_claimable_range
+    label: In a claimable cloud range
+    group: network
+    type: bool
+    filter: bool
+    width: 170
+    default_visible: false
+    description: Resolves into an address block published by a cloud provider (config/cloud_ranges.yaml).
+  - key: claimable_provider
+    label: Cloud provider
+    group: network
+    type: enum
+    filter: multiselect
+    width: 140
+    default_visible: false
+  - key: dangling_a_record
+    label: Dangling DNS record
+    group: network
+    type: bool
+    filter: bool
+    width: 140
+    default_visible: false
+    description: Points into an unclaimed cloud range with nothing answering — a takeover risk.
+  - key: cert_subject_cn
+    label: Certificate CN
+    group: network
+    type: text
+    filter: search
+    width: 200
+    default_visible: false
+  - key: cert_issuer_org
+    label: Certificate issuer
+    group: network
+    type: enum
+    filter: multiselect
+    width: 180
+    default_visible: false
+  - key: cert_not_after
+    label: Certificate expires
+    group: network
+    type: datetime
+    filter: daterange
+    width: 170
+    default_visible: false
+  - key: cert_days_remaining
+    label: Days to expiry
+    group: network
+    type: int
+    filter: range
+    width: 120
+    align: right
+    default_visible: false
+  - key: cert_age_days
+    label: Certificate age (days)
+    group: network
+    type: int
+    filter: range
+    width: 150
+    align: right
+    default_visible: false
+  - key: cert_expired
+    label: Certificate expired
+    group: network
+    type: bool
+    filter: bool
+    width: 140
+    default_visible: false
+  - key: cert_self_signed
+    label: Self-signed certificate
+    group: network
+    type: bool
+    filter: bool
+    width: 160
+    default_visible: false
+  - key: cert_mismatched
+    label: Certificate mismatch
+    group: network
+    type: bool
+    filter: bool
+    width: 150
+    default_visible: false
+  - key: cert_untrusted
+    label: Untrusted certificate
+    group: network
+    type: bool
+    filter: bool
+    width: 150
+    default_visible: false
+  - key: cert_wildcard
+    label: Wildcard certificate
+    group: network
+    type: bool
+    filter: bool
+    width: 150
+    default_visible: false
+  - key: cert_wildcard_scope
+    label: Wildcard scope
+    group: network
+    type: text
+    filter: search
+    width: 160
+    default_visible: false
+  - key: cert_san_count
+    label: SAN count
+    group: network
+    type: int
+    filter: range
+    width: 100
+    align: right
+    default_visible: false
+  - key: cert_foreign_domain_count
+    label: Foreign domains on cert
+    group: network
+    type: int
+    filter: range
+    width: 170
+    align: right
+    default_visible: false
+    description: Domains outside our portfolio also named on this certificate.
+  - key: cert_host_count
+    label: Hosts sharing this cert
+    group: network
+    type: int
+    filter: range
+    width: 160
+    align: right
+    default_visible: false
+  - key: tls_version
+    label: TLS version
+    group: network
+    type: enum
+    filter: multiselect
+    width: 100
+    default_visible: false
+  - key: tls_cipher
+    label: Cipher
+    group: network
+    type: enum
+    filter: multiselect
+    width: 220
+    default_visible: false
+  - key: tls_cipher_grade
+    label: Cipher grade
+    group: network
+    type: enum
+    filter: multiselect
+    width: 110
+    default_visible: false
+  - key: jarm_hash
+    label: JARM fingerprint
+    group: network
+    type: text
+    filter: search
+    width: 200
+    default_visible: false
+
+presets:
+  triage:
+    label: Triage
+    columns: [endpoint_key, risk_score, risk_band, worst_severity, top_finding,
+              response_class, status_code, no_waf, auth_surface_type, env]
+  risk:
+    label: Risk detail
+    columns: [endpoint_key, risk_score, risk_band, worst_severity, exposure,
+              hygiene, sensitivity, finding_count, risk_mitigated, risk_confidence]
+  lifecycle:
+    label: Lifecycle
+    columns: [endpoint_key, eol_count, eol_worst_severity, eol_years_past,
+              outdated_count, vuln_family_count, webserver, tech]
+  infra:
+    label: Edge & hosting
+    columns: [endpoint_key, host_ip, hosting_provider, hosting_kind, cdn_name,
+              cdn_type, origin_exposed, origin_health, ip_cluster_size, cname_final]
+  dns:
+    label: DNS
+    columns: [endpoint_key, host_ip, a, aaaa, cname, cname_final, ipv6_enabled,
+              dns_multi_a, resolvers]
+  tech:
+    label: Technology
+    columns: [endpoint_key, webserver, webserver_version, version_disclosure,
+              tech, tech_count, cpe_products, is_wordpress, wp_plugins]
+  quality:
+    label: Data quality
+    columns: [endpoint_key, probe_count, intra_run_inconsistent, scheme_conflict,
+              scan_artifact, cf_alias_port, response_class, scanned_at]
+  network:
+    label: Network & certificates
+    columns: [endpoint_key, host_ip, cidr, ptr_host, ip_foreign_domain_count,
+              dangling_a_record, cert_subject_cn, cert_days_remaining,
+              cert_expired, cert_self_signed, tls_version]
+
+# Saved-view presets, expressed as filters rather than columns.
+filter_presets:
+  - {id: origin_exposed, label: "Origin exposed and serving",
+     filters: {origin_exposed: [true], serves_content: [true]}}
+  - {id: nonprod_public, label: "Non-production on the internet",
+     filters: {env: [dev, test, uat, ta, sit, staging, sandbox], serves_content: [true]}}
+  - {id: auth_surfaces, label: "Authentication surfaces",
+     filters: {auth_surface_type: ["!none"]}}
+  - {id: mgmt_consoles, label: "Management consoles",
+     filters: {mgmt_surface: [true]}}
+  - {id: cleartext, label: "Cleartext with no HTTPS upgrade",
+     filters: {no_tls_redirect: [true]}}
+  - {id: broken_origin, label: "Broken or missing origin",
+     filters: {origin_health: ["!ok"]}}
+  - {id: critical_issues, label: "Critical and high findings",
+     filters: {worst_severity: [critical, high]}}
+  - {id: takeover, label: "Takeover candidates",
+     filters: {takeover_grade: [high, medium]}}
+  - {id: eol, label: "End-of-life software",
+     filters: {eol_count: {min: 1}}}
+  - {id: unmitigated_critical, label: "Critical, with nothing mitigating it",
+     filters: {worst_severity: [critical], risk_mitigated: [false]}}
+  - {id: real_services, label: "Real services (aliases and artefacts excluded)",
+     filters: {scan_artifact: [false], cf_alias_port: [false], serves_content: [true]}}
+  - {id: dangling_dns, label: "Dangling DNS records",
+     filters: {dangling_a_record: [true]}}
+  - {id: certs_expiring, label: "Certificates expiring or broken",
+     filters: {cert_expired: [true]}}

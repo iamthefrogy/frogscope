@@ -1,0 +1,750 @@
+# Passive product and panel fingerprints.
+#
+# WHAT THIS IS FOR
+# The single highest-value attack-surface question is "what is reachable that
+# should not be?" — an admin console, a CI server, a database UI, a monitoring
+# dashboard. Upstream catalogues cover this with hundreds of templates that each
+# request a specific path. We cannot do that: nothing here sends a packet.
+#
+# So these fingerprints match only what a scan already returned:
+#
+#   title    the page title (httpx default)
+#   tech     technology names from -tech-detect
+#   cpe      CPE product strings
+#   server   the Server header via -web-server
+#   body     response body, ONLY when the scan used -body-preview
+#   favicon  favicon MD5, ONLY when the scan used -favicon
+#   port     the port it answered on
+#
+# That is a real limitation and it is stated rather than hidden: a panel sitting
+# at /admin on a host whose root page is a marketing site will NOT be found here.
+# `frogscope suggest-httpx` says which flags widen the net.
+#
+# WHY GROUPS
+# `exposure` is what a reviewer acts on, and it differs by product even at equal
+# confidence. A public Grafana is embarrassing; a public Jenkins is a breach
+# waiting to happen, because Jenkins runs code by design.
+#
+#   admin_panel        general administrative interface
+#   infra_console      controls servers, clusters, or containers
+#   ci_cd              can build or deploy code — treat as production access
+#   database_ui        direct data access
+#   monitoring         observability, often with credentials inside
+#   network_device     router, firewall, VPN, load balancer
+#   dev_tool           source control, artefact stores, issue trackers
+#   webmail            mail access
+#   storage            object storage or file transfer
+#   iot                cameras, printers, building systems
+#
+# MAINTENANCE
+# `source:` records provenance. See README.md (Maintenance) for how to
+# re-review against upstream and what was deliberately left out.
+
+version: 3
+
+# Confidence in the MATCH, separate from how bad the exposure is. A default
+# install page proves the product; a generic word in a title only suggests it.
+match_confidence:
+  confirmed: A product-specific string or favicon hash that nothing else emits
+  probable:  A distinctive title or technology combination
+  possible:  A generic word that other products also use
+
+# ── Panels and consoles ─────────────────────────────────────────────────────
+# Ordered within each group by how much authority the product carries. Each entry
+# needs `id`, `product`, `group`, and at least one matcher.
+
+panels:
+  # ── CI/CD: anything here can usually run code on the build host ────────────
+  - id: PANEL_JENKINS
+    product: Jenkins
+    group: ci_cd
+    title: ['^Dashboard \[Jenkins\]', 'Jenkins \[Jenkins\]']
+    tech: [Jenkins]
+    body: ['Welcome to Jenkins!', 'jenkins-session']
+    confidence: confirmed
+    note: >
+      Jenkins executes arbitrary build steps. An unauthenticated instance is
+      remote code execution by design, not a misconfiguration to schedule.
+
+  - id: PANEL_GITLAB
+    product: GitLab
+    group: dev_tool
+    title: ['GitLab', 'Sign in · GitLab']
+    tech: [GitLab]
+    require_title: true
+    confidence: probable
+
+  - id: PANEL_TEAMCITY
+    product: TeamCity
+    group: ci_cd
+    title: ['Log in to TeamCity', 'TeamCity']
+    tech: [TeamCity]
+    confidence: probable
+
+  - id: PANEL_BAMBOO
+    product: Atlassian Bamboo
+    group: ci_cd
+    title: ['Atlassian Bamboo', 'Bamboo - ']
+    confidence: probable
+
+  - id: PANEL_ARGOCD
+    product: Argo CD
+    group: ci_cd
+    title: ['Argo CD']
+    body: ['argocd.token']
+    confidence: probable
+
+  - id: PANEL_DRONE
+    product: Drone CI
+    group: ci_cd
+    title: ['Drone']
+    confidence: possible
+
+  - id: PANEL_OCTOPUS
+    product: Octopus Deploy
+    group: ci_cd
+    title: ['Octopus Deploy']
+    confidence: probable
+
+  # ── Infrastructure and orchestration ──────────────────────────────────────
+  - id: PANEL_KUBERNETES
+    product: Kubernetes Dashboard
+    group: infra_console
+    title: ['Kubernetes Dashboard']
+    tech: [Kubernetes]
+    confidence: confirmed
+    note: >
+      A reachable Kubernetes dashboard usually means cluster-wide control, and
+      historically many were deployed with authentication disabled.
+
+  - id: PANEL_RANCHER
+    product: Rancher
+    group: infra_console
+    title: ['Rancher']
+    confidence: probable
+
+  - id: PANEL_PORTAINER
+    product: Portainer
+    group: infra_console
+    title: ['Portainer']
+    confidence: confirmed
+
+  - id: PANEL_PROXMOX
+    product: Proxmox VE
+    group: infra_console
+    title: ['Proxmox Virtual Environment']
+    confidence: confirmed
+
+  - id: PANEL_VCENTER
+    product: VMware vSphere / vCenter
+    group: infra_console
+    title: ['vSphere Client', 'VMware vCenter', 'VMware ESXi']
+    confidence: confirmed
+
+  - id: PANEL_CONSUL
+    product: HashiCorp Consul
+    group: infra_console
+    title: ['Consul by HashiCorp', 'Consul']
+    confidence: probable
+
+  - id: PANEL_NOMAD
+    product: HashiCorp Nomad
+    group: infra_console
+    title: ['Nomad by HashiCorp', 'Nomad']
+    confidence: probable
+
+  - id: PANEL_VAULT
+    product: HashiCorp Vault
+    group: infra_console
+    title: ['Vault by HashiCorp', 'Vault']
+    confidence: probable
+    note: Vault holds secrets. Reachability alone deserves a look.
+
+  - id: PANEL_COCKPIT
+    product: Cockpit
+    group: infra_console
+    title: ['Cockpit']
+    cpe: ['agentejo:cockpit', 'redhat:cockpit']
+    confidence: probable
+
+  - id: PANEL_WEBMIN
+    product: Webmin
+    group: infra_console
+    title: ['Webmin', 'Usermin']
+    confidence: confirmed
+
+  - id: PANEL_CPANEL
+    product: cPanel / WHM
+    group: admin_panel
+    title: ['cPanel', 'WebHost Manager', '\bWHM\b']
+    port: [2082, 2083, 2086, 2087]
+    confidence: probable
+
+  - id: PANEL_PLESK
+    product: Plesk
+    group: admin_panel
+    title: ['Plesk Obsidian', 'Plesk Onyx', 'Plesk']
+    port: [8443, 8880]
+    confidence: probable
+
+  - id: PANEL_DIRECTADMIN
+    product: DirectAdmin
+    group: admin_panel
+    title: ['DirectAdmin Login']
+    confidence: probable
+
+  # ── Databases and data tooling ────────────────────────────────────────────
+  - id: PANEL_PHPMYADMIN
+    product: phpMyAdmin
+    group: database_ui
+    title: ['phpMyAdmin']
+    body: ['pma_username', 'phpMyAdmin']
+    confidence: confirmed
+    note: Direct database access, and a perennial target for credential attacks.
+
+  - id: PANEL_ADMINER
+    product: Adminer
+    group: database_ui
+    title: ['Adminer', 'Login - Adminer']
+    confidence: confirmed
+
+  - id: PANEL_PGADMIN
+    product: pgAdmin
+    group: database_ui
+    title: ['pgAdmin']
+    confidence: confirmed
+
+  - id: PANEL_MONGO_EXPRESS
+    product: mongo-express
+    group: database_ui
+    title: ['Mongo Express', 'mongo-express']
+    confidence: confirmed
+
+  - id: PANEL_ELASTIC_HEAD
+    product: Elasticsearch UI
+    group: database_ui
+    title: ['elasticsearch-head', 'Elasticsearch']
+    tech: [Elasticsearch]
+    require_title: true
+    confidence: probable
+
+  - id: PANEL_KIBANA
+    product: Kibana
+    group: database_ui
+    title: ['Kibana']
+    tech: [Kibana]
+    require_title: true
+    confidence: probable
+
+  - id: PANEL_COUCHDB
+    product: CouchDB Fauxton
+    group: database_ui
+    title: ['Project Fauxton', 'Apache CouchDB']
+    confidence: confirmed
+
+  - id: PANEL_REDIS_COMMANDER
+    product: Redis Commander
+    group: database_ui
+    title: ['Redis Commander']
+    confidence: confirmed
+
+  - id: PANEL_RABBITMQ
+    product: RabbitMQ Management
+    group: infra_console
+    title: ['RabbitMQ Management']
+    confidence: confirmed
+
+  - id: PANEL_KAFKA_UI
+    product: Kafka UI
+    group: infra_console
+    title: ['Kafka UI', 'Kafdrop']
+    confidence: probable
+
+  - id: PANEL_AIRFLOW
+    product: Apache Airflow
+    group: infra_console
+    title: ['Airflow', 'Sign In - Airflow']
+    confidence: probable
+    note: Airflow runs scheduled code, so treat it as build-system access.
+
+  # ── Monitoring and observability ──────────────────────────────────────────
+  - id: PANEL_GRAFANA
+    product: Grafana
+    group: monitoring
+    title: ['Grafana']
+    tech: [Grafana]
+    confidence: confirmed
+
+  - id: PANEL_PROMETHEUS
+    product: Prometheus
+    group: monitoring
+    title: ['Prometheus Time Series Collection', 'Prometheus']
+    confidence: probable
+
+  - id: PANEL_ZABBIX
+    product: Zabbix
+    group: monitoring
+    title: ['Zabbix']
+    confidence: confirmed
+
+  - id: PANEL_NAGIOS
+    product: Nagios
+    group: monitoring
+    title: ['Nagios', 'Nagios Core']
+    confidence: confirmed
+
+  - id: PANEL_CACTI
+    product: Cacti
+    group: monitoring
+    title: ['Cacti']
+    confidence: confirmed
+
+  - id: PANEL_NETDATA
+    product: Netdata
+    group: monitoring
+    title: ['netdata dashboard', 'Netdata']
+    confidence: probable
+
+  - id: PANEL_SPLUNK
+    product: Splunk
+    group: monitoring
+    title: ['Splunk', 'Login - Splunk']
+    confidence: probable
+
+  - id: PANEL_SOLARWINDS
+    product: SolarWinds Orion
+    group: monitoring
+    title: ['SolarWinds Orion', 'Orion Platform']
+    confidence: probable
+
+  # ── Network and security devices ──────────────────────────────────────────
+  - id: PANEL_FORTIGATE
+    product: Fortinet FortiGate
+    group: network_device
+    title: ['FortiGate', 'Fortinet', 'FortiOS']
+    cpe: ['fortinet:fortios', 'fortinet:fortigate']
+    confidence: confirmed
+    note: >
+      Edge security devices sit in front of everything else, and their management
+      interfaces have a long history of pre-authentication flaws.
+
+  - id: PANEL_PALOALTO
+    product: Palo Alto GlobalProtect / PAN-OS
+    group: network_device
+    title: ['GlobalProtect Portal', 'PAN-OS', 'Palo Alto Networks']
+    confidence: confirmed
+
+  - id: PANEL_CISCO_ASA
+    product: Cisco ASA / AnyConnect
+    group: network_device
+    title: ['SSL VPN Service', 'Cisco Systems', 'AnyConnect']
+    cpe: ['cisco:adaptive-security-appliance-software', 'cisco:asa']
+    confidence: confirmed
+
+  - id: PANEL_CITRIX
+    product: Citrix Gateway / NetScaler
+    group: network_device
+    title: ['Citrix Gateway', 'NetScaler', 'LogonPoint', 'Citrix Access Gateway']
+    cpe: ['citrix:gateway', 'citrix:netscaler_application_delivery_controller']
+    confidence: confirmed
+
+  - id: PANEL_PULSE
+    product: Ivanti / Pulse Connect Secure
+    group: network_device
+    title: ['Pulse Secure', 'Pulse Connect Secure', 'Ivanti Connect Secure']
+    cpe: ['pulsesecure:pulse_connect_secure', 'ivanti:connect_secure']
+    confidence: confirmed
+
+  - id: PANEL_SONICWALL
+    product: SonicWall
+    group: network_device
+    title: ['SonicWall', 'Virtual Office']
+    confidence: probable
+
+  - id: PANEL_SOPHOS
+    product: Sophos Firewall
+    group: network_device
+    title: ['Sophos', 'User Portal']
+    confidence: possible
+
+  - id: PANEL_F5
+    product: F5 BIG-IP
+    group: network_device
+    title: ['BIG-IP', 'F5 Networks']
+    confidence: confirmed
+
+  - id: PANEL_RDWEB
+    product: Microsoft RD Web Access
+    group: network_device
+    title: ['RD Web Access', 'RemoteApp and Desktop', 'Remote Desktop Web']
+    cpe: ['microsoft:remote_desktop']
+    confidence: confirmed
+
+  - id: PANEL_PRTG
+    product: PRTG Network Monitor
+    group: monitoring
+    title: ['PRTG Network Monitor', 'Welcome \| PRTG']
+    confidence: confirmed
+
+  - id: PANEL_UNIFI
+    product: Ubiquiti UniFi
+    group: network_device
+    title: ['UniFi', 'Ubiquiti']
+    confidence: probable
+
+  # ── Developer and artefact tooling ────────────────────────────────────────
+  - id: PANEL_JIRA
+    product: Atlassian Jira
+    group: dev_tool
+    title: ['Jira', 'System Dashboard - Jira', 'Log in - Jira']
+    tech: [Jira]
+    require_title: true
+    confidence: probable
+
+  - id: PANEL_CONFLUENCE
+    product: Atlassian Confluence
+    group: dev_tool
+    title: ['Confluence', 'Log In - Confluence']
+    tech: [Confluence]
+    require_title: true
+    confidence: probable
+
+  - id: PANEL_SONARQUBE
+    product: SonarQube
+    group: dev_tool
+    title: ['SonarQube']
+    confidence: confirmed
+
+  - id: PANEL_NEXUS
+    product: Sonatype Nexus
+    group: dev_tool
+    title: ['Nexus Repository Manager', 'Sonatype Nexus']
+    confidence: confirmed
+
+  - id: PANEL_ARTIFACTORY
+    product: JFrog Artifactory
+    group: dev_tool
+    title: ['Artifactory', 'JFrog']
+    confidence: probable
+
+  - id: PANEL_GITEA
+    product: Gitea
+    group: dev_tool
+    title: ['Gitea', 'Gitea: Git with a cup of tea']
+    confidence: confirmed
+
+  - id: PANEL_GERRIT
+    product: Gerrit Code Review
+    group: dev_tool
+    title: ['Gerrit Code Review']
+    confidence: confirmed
+
+  - id: PANEL_SWAGGER
+    product: API documentation
+    group: dev_tool
+    title: ['Swagger UI', 'Swagger', 'ReDoc', 'GraphiQL', 'API Documentation']
+    confidence: probable
+    note: >
+      Published API documentation is not itself a flaw, but it enumerates the
+      whole API surface for anyone who finds it.
+
+  # ── Content and application platforms ─────────────────────────────────────
+  - id: PANEL_WORDPRESS_ADMIN
+    product: WordPress admin
+    group: admin_panel
+    title: ['Log In &lsaquo;', 'WordPress &rsaquo; ', 'wp-admin']
+    tech: [WordPress]
+    require_title: true
+    confidence: probable
+
+  - id: PANEL_DRUPAL_ADMIN
+    product: Drupal admin
+    group: admin_panel
+    title: ['Log in \| Drupal', 'Drupal']
+    tech: [Drupal]
+    require_title: true
+    confidence: possible
+
+  - id: PANEL_JOOMLA_ADMIN
+    product: Joomla administrator
+    group: admin_panel
+    title: ['Joomla! Administration Login', 'Joomla']
+    tech: [Joomla]
+    require_title: true
+    confidence: probable
+
+  - id: PANEL_MAGENTO_ADMIN
+    product: Magento admin
+    group: admin_panel
+    title: ['Magento Admin', 'Magento']
+    tech: [Magento]
+    require_title: true
+    confidence: possible
+
+  - id: PANEL_TOMCAT_MANAGER
+    product: Apache Tomcat Manager
+    group: infra_console
+    title: ['Apache Tomcat', 'Tomcat Web Application Manager', '/manager/html']
+    confidence: probable
+    note: >
+      The Tomcat manager can deploy a WAR file, which is code execution. Default
+      credentials on it are a well-worn path.
+
+  - id: PANEL_JBOSS
+    product: JBoss / WildFly
+    group: infra_console
+    title: ['JBoss', 'WildFly', 'Welcome to JBoss']
+    confidence: probable
+
+  - id: PANEL_WEBLOGIC
+    product: Oracle WebLogic
+    group: infra_console
+    title: ['WebLogic', 'Oracle WebLogic Server Administration Console']
+    port: [7001, 7002]
+    confidence: confirmed
+    note: >
+      WebLogic on 7001 has a long history of pre-authentication remote code
+      execution. Its presence on the public internet is itself the finding.
+
+  - id: PANEL_WEBSPHERE
+    product: IBM WebSphere
+    group: infra_console
+    title: ['WebSphere', 'IBM WebSphere Application Server']
+    confidence: probable
+
+  - id: PANEL_COLDFUSION
+    product: Adobe ColdFusion
+    group: admin_panel
+    title: ['ColdFusion Administrator', 'Adobe ColdFusion']
+    confidence: confirmed
+
+  - id: PANEL_N8N
+    product: n8n
+    group: ci_cd
+    title: ['\bn8n\b']
+    cpe: ['n8n:n8n']
+    confidence: probable
+    note: n8n runs workflows that reach other systems, often with stored credentials.
+
+  # ── Webmail and collaboration ─────────────────────────────────────────────
+  - id: PANEL_OWA
+    product: Outlook Web Access
+    group: webmail
+    title: ['Outlook Web App', 'Outlook', 'Microsoft Exchange']
+    confidence: probable
+
+  - id: PANEL_ROUNDCUBE
+    product: Roundcube
+    group: webmail
+    title: ['Roundcube Webmail', 'Roundcube']
+    confidence: confirmed
+
+  - id: PANEL_ZIMBRA
+    product: Zimbra
+    group: webmail
+    title: ['Zimbra', 'Zimbra Web Client']
+    confidence: confirmed
+
+  - id: PANEL_HORDE
+    product: Horde
+    group: webmail
+    title: ['Horde', 'Horde :: Log in']
+    confidence: probable
+
+  # ── Storage and transfer ──────────────────────────────────────────────────
+  - id: PANEL_MINIO
+    product: MinIO
+    group: storage
+    title: ['MinIO Console', 'MinIO Browser']
+    confidence: confirmed
+
+  - id: PANEL_NEXTCLOUD
+    product: Nextcloud / ownCloud
+    group: storage
+    title: ['Nextcloud', 'ownCloud']
+    confidence: confirmed
+
+  - id: PANEL_MOVEIT
+    product: Progress MOVEit Transfer
+    group: storage
+    title: ['MOVEit', 'MOVEit Transfer', 'MOVEit DMZ']
+    confidence: confirmed
+    note: >
+      Managed file transfer products hold whatever was transferred through them,
+      and have been mass-exploited. Worth an explicit inventory entry.
+
+  - id: PANEL_GOANYWHERE
+    product: Fortra GoAnywhere MFT
+    group: storage
+    title: ['GoAnywhere', 'GoAnywhere MFT']
+    confidence: confirmed
+
+  - id: PANEL_FILEZILLA
+    product: FileZilla Server
+    group: storage
+    title: ['FileZilla Server']
+    confidence: probable
+
+  # ── Building systems, cameras, printers ───────────────────────────────────
+  - id: PANEL_IPCAMERA
+    product: IP camera
+    group: iot
+    title: ['Network Camera', 'IP Camera', 'WEB SERVICE', 'NETSurveillance',
+            'Hikvision', 'Dahua', 'AXIS']
+    confidence: possible
+
+  - id: PANEL_PRINTER
+    product: Network printer
+    group: iot
+    title: ['HP LaserJet', 'Printer Status', 'Xerox', 'Brother', 'Canon',
+            'RICOH', 'Lexmark']
+    confidence: possible
+
+  - id: PANEL_BMS
+    product: Building management system
+    group: iot
+    title: ['Niagara', 'Tridium', 'Desigo', 'BACnet', 'Metasys']
+    confidence: possible
+    note: >
+      Building systems are rarely in an asset inventory and rarely patched, so
+      finding one on the internet is worth a phone call.
+
+  - id: PANEL_IDRAC
+    product: Dell iDRAC
+    group: infra_console
+    title: ['iDRAC', 'Integrated Dell Remote Access']
+    confidence: confirmed
+
+  - id: PANEL_ILO
+    product: HPE iLO
+    group: infra_console
+    title: ['\biLO\b', 'Integrated Lights-Out', 'HP Integrated Lights']
+    confidence: confirmed
+    note: >
+      Out-of-band management gives console-level access to the physical host,
+      below the operating system.
+
+  - id: PANEL_IPMI
+    product: IPMI / BMC
+    group: infra_console
+    title: ['\bIPMI\b', '\bBMC\b', 'Baseboard Management']
+    confidence: probable
+
+# ── Default and placeholder pages ───────────────────────────────────────────
+# A default page means the software is installed and nobody finished the job.
+# Distinct from a panel: no authority is exposed, but it advertises the stack and
+# often indicates an unmanaged host.
+
+default_pages:
+  - id: DEFAULT_IIS
+    product: Microsoft IIS
+    title: ['^IIS Windows Server$', '^IIS7?$', '^Microsoft Internet Information Services']
+  - id: DEFAULT_APACHE
+    product: Apache HTTP Server
+    title: ['Apache2? (Ubuntu |Debian |CentOS )?Default Page', '^It works!$']
+  - id: DEFAULT_NGINX
+    product: nginx
+    title: ['Welcome to nginx']
+  - id: DEFAULT_TOMCAT
+    product: Apache Tomcat
+    title: ['Apache Tomcat/\d', 'If you''re seeing this, you''ve successfully installed Tomcat']
+  - id: DEFAULT_XAMPP
+    product: XAMPP
+    title: ['XAMPP', 'Welcome to XAMPP']
+  - id: DEFAULT_PLESK_PLACEHOLDER
+    product: Plesk placeholder
+    title: ['Web Server''s Default Page', 'Plesk']
+  - id: DEFAULT_WAMP
+    product: WampServer
+    title: ['WAMPSERVER Homepage']
+  - id: DEFAULT_LARAVEL
+    product: Laravel
+    title: ['^Laravel$']
+  - id: DEFAULT_DJANGO
+    product: Django
+    title: ['The install worked successfully! Congratulations!']
+  - id: DEFAULT_SPRINGBOOT
+    product: Spring Boot
+    title: ['Whitelabel Error Page']
+
+# ── Information disclosure visible without probing ──────────────────────────
+# Only what a root-page response can reveal. Anything needing a path request
+# (/.git, /.env, /backup.zip) is intentionally absent — see the docs.
+
+disclosure:
+  - id: DISCLOSE_DIR_LISTING
+    label: Directory listing enabled
+    title: ['^Index of /', '^Directory Listing', '^Directory listing for']
+    severity: medium
+    why: >
+      The web server enumerates files instead of serving a page, so anything left
+      in the directory is browsable.
+
+  - id: DISCLOSE_STACK_TRACE
+    label: Stack trace or debug output
+    title: ['Whitelabel Error Page', 'Stack Trace', 'Traceback \(most recent',
+            'Server Error in .* Application', 'Fatal error:', 'Warning: ',
+            'Undefined variable', 'ORA-\d{5}', 'SQLSTATE\[']
+    severity: medium
+    why: >
+      Error output typically names internal paths, library versions, and
+      sometimes database structure.
+
+  - id: DISCLOSE_PHPINFO
+    label: phpinfo() output
+    title: ['phpinfo\(\)', 'PHP Version \d']
+    severity: high
+    why: >
+      phpinfo lists the full configuration, loaded modules, absolute paths, and
+      often environment variables.
+
+  - id: DISCLOSE_SERVER_STATUS
+    label: Server status page
+    title: ['Apache Status', 'Server Status', 'nginx status']
+    severity: medium
+    why: Live request URLs and client addresses, which can include session tokens.
+
+  - id: DISCLOSE_ENV_IN_BODY
+    label: Configuration values in the response
+    body: ['DB_PASSWORD=', 'AWS_SECRET_ACCESS_KEY', 'BEGIN RSA PRIVATE KEY',
+           'BEGIN OPENSSH PRIVATE KEY', 'xoxb-', 'ghp_[A-Za-z0-9]{36}']
+    severity: critical
+    requires_fields: [body_preview]
+    why: >
+      A credential in a response body should be treated as already compromised —
+      assume it has been indexed.
+
+  - id: DISCLOSE_VERSION_BANNER
+    label: Version in the Server header
+    server: ['/\d+\.\d+']
+    severity: low
+    why: >
+      A precise version tells an attacker which published flaws to try without
+      testing for them.
+
+# ── Cloud storage exposure ──────────────────────────────────────────────────
+storage_exposure:
+  - id: STORAGE_S3_LISTABLE
+    product: Amazon S3
+    body: ['<ListBucketResult', '<Name>.*</Name><Prefix>']
+    severity: high
+    requires_fields: [body_preview]
+    why: The bucket lists its contents to anonymous callers.
+  - id: STORAGE_AZURE_BLOB_LISTABLE
+    product: Azure Blob Storage
+    body: ['<EnumerationResults', 'ContainerName=']
+    severity: high
+    requires_fields: [body_preview]
+  - id: STORAGE_GCS_LISTABLE
+    product: Google Cloud Storage
+    body: ['<ListBucketResult', 'storage.googleapis.com']
+    severity: high
+    requires_fields: [body_preview]
+  - id: STORAGE_BUCKET_MISSING
+    product: Object storage
+    body: ['<Code>NoSuchBucket</Code>', 'The specified bucket does not exist']
+    severity: high
+    requires_fields: [body_preview]
+    why: >
+      The bucket name is unclaimed. Whoever registers it next serves content from
+      this hostname.

@@ -1,0 +1,306 @@
+# Run-over-run change detection.
+#
+# The hard part of diffing scans is not finding differences — it is refusing to
+# report the ones that do not mean anything. A feed that cries wolf every week
+# gets ignored, and then a real change goes unnoticed.
+#
+# Three sources of false change in this data specifically:
+#
+#   1. Round-robin DNS. `host_ip` legitimately differs between two probes
+#      seconds apart, so it is never diffed; the A-record *set* is diffed
+#      instead.
+#   2. OAuth redirects. Microsoft 365 `final_url` values carry a fresh nonce on
+#      every probe. Without stripping those parameters, every SSO endpoint in the
+#      estate reports as changed on every single run.
+#   3. Content jitter. A byte or two of difference in a dynamically rendered page
+#      is not a change worth anyone's attention.
+
+# Identity for the set difference. Deliberately not the URL (a scheme flip would
+# read as remove-plus-add) and not the IP (round-robin churn).
+keys:
+  endpoint: "{host}:{port}"
+  host: "{host}"
+
+# Trailing window used for flapping detection, in runs.
+flap_window: 6
+# Presence transitions within that window before an asset is called unstable.
+flap_threshold: 3
+
+# Query parameters stripped from any URL before comparison. All of these are
+# per-request values, so a difference in them says nothing about the endpoint.
+volatile_url_params:
+  - nonce
+  - state
+  - client-request-id
+  - client_request_id
+  - ear_jwe_crypto
+  - ear_jwk
+  - sessionid
+  - session_id
+  - jsessionid
+  - requestid
+  - request_id
+  - correlationid
+  - correlation_id
+  - traceid
+  - csrf
+  - csrftoken
+  - csrf_token
+  - authenticity_token
+  - timestamp
+  - ts
+  - _
+  - cachebust
+  - cb
+  - sig
+  - signature
+  - token
+  - code
+  - id_token
+  - access_token
+  - saml_request
+  - samlrequest
+  - relaystate
+  - wctx
+  - wct
+
+# Fields compared, with how to compare them and what a change means.
+#
+#   kind        scalar | set | numeric | ordinal | url | bool
+#   severity    how much attention a change here deserves
+#   noisy       true = hidden by default in the UI; still recorded
+#   direction   for ordinal/numeric, whether up is worse
+tracked:
+  # ── Semantic state. These are the changes worth waking up for.
+  response_class:
+    kind: ordinal
+    severity: high
+    order: [dead, scan_artifact, not_found, forbidden, client_error, parked,
+            redirect_only, server_error, origin_tls_failure, origin_unreachable,
+            waf_challenge, waf_blocked, auth_required, live_content]
+    note: >
+      A move from waf_blocked to live_content means protection was removed. A
+      move to origin_unreachable means the origin stopped resolving.
+
+  risk_band:
+    kind: ordinal
+    severity: high
+    order: [info, low, medium, high, critical]
+    direction: up_is_worse
+    note: The executive-facing transition.
+
+  worst_severity:
+    kind: ordinal
+    severity: high
+    order: ["", info, low, medium, high, critical]
+    direction: up_is_worse
+
+  findings:
+    kind: set
+    severity: high
+    note: The most actionable output — which rules started or stopped firing.
+
+  waf_protected:
+    kind: bool
+    severity: high
+    direction: false_is_worse
+    note: Protection appearing or disappearing.
+
+  origin_exposed:
+    kind: bool
+    severity: high
+    direction: true_is_worse
+
+  no_waf:
+    kind: bool
+    severity: high
+    direction: true_is_worse
+
+  cdn_name:
+    kind: scalar
+    severity: high
+    note: A change of edge provider, or losing one entirely.
+
+  cname:
+    kind: set
+    severity: high
+    note: Re-delegation. Also how a dangling record appears.
+
+  takeover_grade:
+    kind: ordinal
+    severity: high
+    order: ["", low, medium, high]
+    direction: up_is_worse
+
+  origin_health:
+    kind: scalar
+    severity: high
+
+  cpe_products:
+    kind: set
+    severity: high
+    note: Software identity changed — new platform, or an upgrade.
+
+  auth_surface_type:
+    kind: scalar
+    severity: high
+    note: A login surface appearing or disappearing.
+
+  # ── Meaningful, but not usually urgent.
+  risk_score:
+    kind: numeric
+    severity: medium
+    threshold: 5
+    direction: up_is_worse
+    note: Small moves are absorbed; the threshold keeps re-scoring noise out.
+
+  status_code:
+    kind: scalar
+    severity: medium
+
+  title_class:
+    kind: scalar
+    severity: medium
+
+  webserver:
+    kind: scalar
+    severity: medium
+    note: Usually an upgrade, occasionally a different backend answering.
+
+  tech:
+    kind: set
+    severity: medium
+
+  wp_plugins:
+    kind: set
+    severity: medium
+
+  a:
+    kind: set
+    severity: medium
+    note: The A-record SET, not the single resolved IP.
+
+  aaaa:
+    kind: set
+    severity: medium
+
+  eol_count:
+    kind: numeric
+    severity: medium
+    threshold: 0
+    direction: up_is_worse
+
+  scheme:
+    kind: scalar
+    severity: medium
+
+  redirect_target_host:
+    kind: scalar
+    severity: medium
+    source: final_host
+
+  mgmt_surface:
+    kind: bool
+    severity: medium
+    direction: true_is_worse
+
+  remote_access_exposed:
+    kind: bool
+    severity: medium
+    direction: true_is_worse
+
+  # ── Low signal. Recorded, but they should not lead a report.
+  title:
+    kind: scalar
+    severity: low
+    normalise: whitespace
+
+  final_url:
+    kind: url
+    severity: low
+    note: Compared with volatile parameters stripped.
+
+  content_length:
+    kind: numeric
+    severity: low
+    threshold_pct: 5
+    threshold: 512
+    note: Absorbs render jitter on dynamic pages.
+
+  hosting_provider:
+    kind: scalar
+    severity: low
+
+  # ── Noisy by nature. Hidden by default; still stored so a deliberate look is
+  #    possible.
+  host_ip:
+    kind: scalar
+    severity: low
+    noisy: true
+    note: >
+      Rotates behind a CDN by design, and varies between probes within a single
+      run. The A-record set above is the meaningful version of this.
+
+# Changes to how WE classify an asset, rather than to the asset itself. Reported
+# in their own section: a config edit must never masquerade as attacker activity
+# or as an infrastructure change.
+classification_fields:
+  - env
+  - zone
+  - port_category
+  - registrable_domain
+
+# Never compared. Either they differ between two probes of an unchanged endpoint,
+# or a change in them says nothing about the endpoint itself.
+#
+# `content_sig` and the two cluster sizes were tracked at first and had to be
+# removed. content_sig is a hash over status, size, and title, so a single byte of
+# render jitter flips it — defeating the content_length tolerance that exists
+# precisely to absorb that. The cluster sizes are cross-row aggregates: changing
+# one endpoint mechanically changes them for every peer, which turned 10 real
+# mutations into 384 reported "changes". Cluster sizes belong in the trend
+# metrics, not in a per-endpoint diff.
+ignored:
+  - content_sig
+  - content_cluster_size
+  - ip_cluster_size
+  - scanned_at
+  - response_ms
+  - probe_count
+  - words
+  - lines
+  - resolvers
+  - url
+  - path
+  - method
+  - source_row
+  - risk_coverage
+  - risk_confidence
+
+# Metrics materialised per run for the trend charts. Long format, so adding one
+# needs no schema change.
+metrics:
+  - {key: hosts,                 label: Hosts}
+  - {key: endpoints,             label: Endpoints probed}
+  - {key: real_endpoints,        label: Distinct services}
+  - {key: serving,               label: Serving content}
+  - {key: no_waf,                label: Endpoints with no WAF}
+  - {key: no_waf_hosts,          label: Hosts with no WAF}
+  - {key: origin_exposed_hosts,  label: Hosts reached directly}
+  - {key: cdn_bypass_hosts,      label: Hosts where the WAF is bypassable}
+  - {key: auth_surfaces,         label: Login surfaces}
+  - {key: mgmt_surfaces,         label: Management consoles}
+  - {key: remote_access,         label: Remote-access portals}
+  - {key: nonprod_exposed,       label: Non-production reachable}
+  - {key: broken_origin,         label: Broken or missing origin}
+  - {key: unique_ips,            label: Distinct IPs}
+  - {key: findings_total,        label: Open findings}
+  - {key: findings_critical,     label: Critical findings}
+  - {key: findings_high,         label: High findings}
+  - {key: findings_medium,       label: Medium findings}
+  - {key: findings_low,          label: Low findings}
+  - {key: hosts_needing_attention, label: Hosts needing attention}
+  - {key: posture_index_host,    label: Posture index (by host), direction: up_is_better}
+  - {key: posture_index_endpoint, label: Posture index (by endpoint), direction: up_is_better}
+  - {key: eol_hosts,             label: Hosts with end-of-life software}
+  - {key: takeover_candidates,   label: Takeover candidates}

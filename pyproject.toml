@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "frogscope"
+version = "1.0.0"
+description = "An honest map of your internet-facing estate, and what changed since last time."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+keywords = [
+    "attack-surface-management", "asm", "httpx", "security", "reconnaissance",
+    "external-attack-surface", "subdomain-takeover",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+]
+
+# Two runtime dependencies, on purpose. The SPA is vendored (Preact + htm, 16 KB)
+# so there is no npm, no bundler, and no build step; charts are hand-rolled SVG;
+# the spreadsheet writer is zipped XML rather than a library. Fewer moving parts
+# to keep current, and the whole thing runs offline.
+dependencies = [
+    "Flask>=3.0,<4.0",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.scripts]
+frogscope = "frogscope.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/frogy/frogscope"
+Repository = "https://github.com/frogy/frogscope"
+Issues = "https://github.com/frogy/frogscope/issues"
+
+[tool.setuptools.packages.find]
+include = ["frogscope*"]
+
+[tool.setuptools.package-data]
+# The vendored SPA, stylesheets, templates, and SQL migrations are all part of the
+# package rather than external assets.
+frogscope = [
+    "static/**/*", "templates/*.html", "db/migrations/*.sql",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Quiet by default, but every skip prints its reason: a test that silently skips
+# looks like a test that passed.
+addopts = "-q -ra"
+
+[tool.ruff]
+line-length = 90
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    "E501",    # long lines are caught by review, not by a linter
+    "SIM108",  # a ternary is not always clearer than an if
+    "B008",    # Flask and argparse both rely on call-time defaults
+    "SIM105",  # try/except/pass is clearer than contextlib.suppress for the
+               # best-effort reads here, where failure is the expected case
+    "SIM401",  # assumes a dict; most row objects here are sqlite3.Row, which
+               # supports subscripting and .keys() but has no .get()
+    "SIM118",  # same reason: `key in row` is not supported on sqlite3.Row
+    "B904",    # an API error handler deliberately hides the internal cause from
+               # the HTTP response
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]      # fixtures are imported where they are used

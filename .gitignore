@@ -1,0 +1,51 @@
+# ── Never commit scan data ───────────────────────────────────────────────────
+# A scan file is an organisation's external asset inventory. Everything is
+# excluded by default and only the two synthetic sets are allowed back in.
+*.csv
+*.tsv
+*.jsonl
+*.csv.gz
+
+# The synthetic exceptions: a demo anyone can run, and the test fixtures. Both
+# use example.com names and RFC 5737 addresses.
+!examples/*.csv
+!tests/fixtures/*.csv
+
+# Database and archived source files.
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm
+
+# Generated output.
+dist/
+build/
+*.egg-info/
+*.html
+!frogscope/templates/*.html
+*.xlsx
+
+# ── Local tooling ────────────────────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ── Editors and operating systems ────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# ── Assistant/session tooling ────────────────────────────────────────────────
+.claude/

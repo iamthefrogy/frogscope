@@ -1,0 +1,57 @@
+# Port classification.
+#
+# Cloudflare proxies a fixed set of ports. When a host is Cloudflare-fronted,
+# every one of those ports is an alias of the same origin site rather than an
+# independent service, so counting them as separate attack surface inflates the
+# figure several-fold. The two alias lists below are Cloudflare's documented
+# supported ports.
+#
+# 8080 and 8880 are genuinely ambiguous: Cloudflare alias ports AND common
+# app-server ports. The `cf_alias_port` derived field only treats them as
+# aliases when cdn_name == cloudflare, so a non-Cloudflare host keeps them as
+# real services.
+
+standard_web: [80, 443]
+
+cf_alias_http:  [2052, 2082, 2086, 2095, 8080, 8880]
+cf_alias_https: [2053, 2083, 2087, 2096, 8443]
+
+# Which detected CDN names the alias-port rule applies to. Cloudflare is the one
+# that publishes this port list, so it is the only default. If another proxy in
+# front of your estate does the same thing, add its `cdn_name` here rather than
+# editing Python — and only if that provider genuinely serves the same origin on
+# every one of the ports above, or the rule would hide real services.
+alias_port_providers: [cloudflare]
+
+# Ports that only ever answer over TLS. Probing them with http:// yields a 400
+# from a correctly-configured server, which is a scan artefact, not a finding.
+tls_only: [443, 2053, 2083, 2087, 2096, 8443, 4433, 4443]
+
+# category -> ports. First match wins; a port may appear once only.
+categories:
+  web_standard:
+    ports: [80, 443]
+    label: Standard web
+    risk_note: null
+  web_alternate:
+    ports: [81, 82, 83, 84, 85, 88, 90, 8001, 8081, 8888, 4433, 4443, 8181, 8090, 9090]
+    label: Alternate web port
+    risk_note: Often a staging, admin, or forgotten second application.
+  cloudflare_alias:
+    ports: [2052, 2053, 2082, 2083, 2086, 2087, 2095, 2096, 8080, 8443, 8880]
+    label: Cloudflare proxy alias
+    risk_note: Alias of the origin site when Cloudflare-fronted; not extra surface.
+  app_server:
+    ports: [7001, 9000]
+    label: Application server
+    risk_note: >
+      7001 is Oracle WebLogic (a repeated target for pre-auth RCE); 9000 is
+      commonly php-fpm, SonarQube, Portainer, or Xdebug.
+  remote_access:
+    ports: [2222]
+    label: Remote access
+    risk_note: Alternate SSH port answering HTTP is unusual and worth inspecting.
+  uncommon:
+    ports: [12345]
+    label: Uncommon / suspicious
+    risk_note: Rarely a deliberate public web service.

@@ -1,0 +1,68 @@
+# Public cloud provider IP ranges — the ASN-free replacement for
+# "which cloud does this address belong to".
+#
+# v2 originally reached for asnmap for this (IP -> ASN -> org name -> is it a
+# cloud provider), but asnmap, `dnsx -asn`, and `mapcidr`'s `ASxxxx` input all
+# require a ProjectDiscovery API key (X-PDCP-Key against asn.projectdiscovery.io).
+# The user's call: skip anything that needs that key. AWS/GCP/Azure/DigitalOcean
+# all separately publish their own address ranges as public, versioned,
+# machine-readable feeds with no key or account required — so the same
+# "is this address inside a cloud provider's block" question is answerable
+# without ASN attribution at all, just plain `ipaddress` containment against
+# these feeds.
+#
+# This file is deliberately NOT a hand-typed CIDR snapshot: every provider's
+# published list changes continuously (daily for AWS), so a static list here
+# would silently go stale the moment it's written and misinform
+# `dangling_a_record`/`in_claimable_range` with confidence it doesn't deserve.
+# Instead this declares WHERE to fetch each provider's live feed and how to
+# parse it; frogscope/ingest/enrich.py (Phase 2b) fetches and caches it
+# locally with a TTL, exactly the same "say what you could not see" posture
+# as the rest of this tool — if a feed can't be reached, claimable-range
+# detection for that provider is skipped and reported, never guessed.
+
+cache:
+  # Where the fetched-and-parsed ranges are cached between scans.
+  path: cache/cloud_ranges.json
+  ttl_hours: 24
+
+providers:
+  - id: aws
+    label: AWS
+    url: https://ip-ranges.amazonaws.com/ip-ranges.json
+    format: aws_ip_ranges_json
+    # Top-level structure: {"prefixes": [{"ip_prefix": "...", "service": "...", ...}],
+    #                        "ipv6_prefixes": [{"ipv6_prefix": "...", ...}]}
+    cidr_field: {v4: prefixes.ip_prefix, v6: ipv6_prefixes.ipv6_prefix}
+
+  - id: gcp
+    label: Google Cloud
+    url: https://www.gstatic.com/ipranges/cloud.json
+    format: gcp_cloud_json
+    # Top-level structure: {"prefixes": [{"ipv4Prefix": "..."} | {"ipv6Prefix": "..."}]}
+    cidr_field: {v4: prefixes.ipv4Prefix, v6: prefixes.ipv6Prefix}
+
+  - id: azure
+    label: Microsoft Azure
+    # Azure publishes this as a versioned download page, not a stable direct
+    # URL — the actual JSON link (ServiceTags_Public_<date>.json) changes
+    # every release. `url` here is the page to resolve that link from; the
+    # fetch step in enrich.py follows the redirect rather than hardcoding a
+    # dated filename that expires.
+    url: https://www.microsoft.com/en-us/download/details.aspx?id=56519
+    format: azure_service_tags_json
+    # Top-level structure: {"values": [{"properties": {"addressPrefixes": ["..."]}}]}
+    cidr_field: {v4_v6_combined: values.properties.addressPrefixes}
+
+  - id: digitalocean
+    label: DigitalOcean
+    url: https://digitalocean.com/geo/google.csv
+    format: csv_cidr_first_column
+    cidr_field: {v4_v6_combined: "column_0"}
+
+# Providers considered "claimable" for DANGLING_A_RECORD purposes: an A
+# record resolving into one of these providers' ranges, with nothing
+# currently answering, is the exact shape of a released-cloud-IP takeover —
+# someone else can request a fresh address from the same provider and
+# inherit whatever trusts the old hostname. All four above qualify.
+claimable_provider_ids: [aws, gcp, azure, digitalocean]

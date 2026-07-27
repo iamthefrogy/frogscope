@@ -1,0 +1,91 @@
+/* Design tokens.
+ *
+ * Token NAMES are deliberately identical to frogy2.0/assets/report.css so CSS
+ * stays portable between the two tools. Chart colours come from the validated
+ * palette — the categorical order below passed every gate of the palette
+ * validator against this exact surface (#111115): adjacent CVD dE 8.4,
+ * normal-vision dE 19.3, all slots at least 3:1 contrast. Do not reorder the
+ * slots; the ordering IS the colour-blind-safety mechanism.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --color-bg:             #09090b;
+  --color-surface:        #111115;
+  --color-surface-muted:  #18181b;
+  --color-surface-raised: #1f1f23;
+  --color-border:         #27272a;
+  --color-border-subtle:  #3f3f46;
+  --color-text:           #fafafa;
+  --color-text-muted:     #a1a1aa;
+  --color-text-subtle:    #71717a;
+  --color-primary:        #06b6d4;
+  --color-primary-dim:    rgba(6, 182, 212, 0.12);
+  --color-primary-strong: #0891b2;
+  --color-success:        #22c55e;
+  --color-danger:         #ef4444;
+  --color-warning:        #f59e0b;
+  --color-info:           #3b82f6;
+  --color-gridline:       rgba(71, 85, 105, 0.45);
+
+  /* Status palette — reserved, never reused for a data series. Always paired
+   * with an icon and a text label, because several of these are deliberately
+   * sub-3:1 on a light surface and colour must never carry meaning alone. */
+  --status-critical: #d03b3b;
+  --status-high:     #ec835a;
+  --status-medium:   #fab219;
+  --status-low:      #71717a;
+  --status-good:     #0ca30c;
+
+  /* Categorical series — fixed order, never cycled. */
+  --series-1: #3987e5;  /* blue */
+  --series-2: #d95926;  /* orange */
+  --series-3: #199e70;  /* aqua */
+  --series-4: #c98500;  /* yellow */
+  --series-5: #d55181;  /* magenta */
+  --series-6: #008300;  /* green */
+  --series-7: #9085e9;  /* violet */
+  --series-8: #e66767;  /* red */
+
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --shadow-soft: 0 18px 42px rgba(2, 6, 23, 0.68);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+               "Liberation Mono", monospace;
+
+  --row-height: 34px;
+  --topbar-height: 52px;
+}
+
+body[data-theme="light"] {
+  color-scheme: light;
+
+  --color-bg:             #f4f4f5;
+  --color-surface:        #ffffff;
+  --color-surface-muted:  #f4f4f5;
+  --color-surface-raised: #ffffff;
+  --color-border:         #e4e4e7;
+  --color-border-subtle:  #d4d4d8;
+  --color-text:           #09090b;
+  --color-text-muted:     #52525b;
+  --color-text-subtle:    #a1a1aa;
+  --color-primary:        #0e7490;
+  --color-primary-dim:    rgba(14, 116, 144, 0.10);
+  --color-gridline:       rgba(148, 163, 184, 0.45);
+
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+
+  --shadow-soft: 0 12px 30px rgba(15, 23, 42, 0.12);
+}

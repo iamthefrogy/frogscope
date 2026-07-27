@@ -1,0 +1,31 @@
+services:
+  frogscope:
+    build: .
+    image: frogscope:latest
+    # 127.0.0.1 on the LEFT is still the important part even with the v2
+    # access-key gate below: defence in depth, not a substitute for it —
+    # without it Docker publishes the port on every interface.
+    ports:
+      - "127.0.0.1:8099:8099"
+    volumes:
+      - frogscope-data:/data
+      # Config is meant to be edited — weights, keywords, ownership. Mounting it
+      # means your tuning survives a rebuild.
+      - ./config:/app/config
+    environment:
+      # Optional API keys widen passive subdomain discovery. Everything works
+      # without them; they simply find more.
+      #   SUBFINDER_CONFIG: /app/config/subfinder.yaml
+      FROGSCOPE_DATA_DIR: /data
+      # v2: a single shared access key gates every feature — generated once
+      # on first start and printed to `docker logs` if left unset here.
+      # Uncomment to pin it explicitly instead (e.g. for CI, or to avoid
+      # reading logs on first run):
+      #   FROGSCOPE_AUTH_KEY: some-long-random-string
+    restart: unless-stopped
+    # Scanning needs no privileges beyond outbound network.
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  frogscope-data:

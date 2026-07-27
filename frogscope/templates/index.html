@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en" data-config-hash="{{ config_hash }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frogscope — an honest map of your internet-facing estate</title>
+<!-- Inline so the browser's automatic /favicon.ico request cannot 404 into the
+     console, and so nothing is fetched from outside this machine. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='none' stroke='%2306b6d4' stroke-width='2'/%3E%3Ccircle cx='8' cy='8' r='2' fill='%2306b6d4'/%3E%3C/svg%3E">
+
+<!-- Everything is served locally. No CDN, no external fonts: the offline
+     single-file export must work with networking disabled, and a font request
+     would break it. -->
+<link rel="stylesheet" href="/static/css/tokens.css">
+<link rel="stylesheet" href="/static/css/app.css">
+<link rel="stylesheet" href="/static/css/print.css">
+
+<!-- Native import map. No bundler, no npm; the three vendored modules total
+     20KB. `hooks.module.js` imports the bare specifier "preact", which is what
+     this map resolves. -->
+<script type="importmap">
+{
+  "imports": {
+    "preact": "/static/vendor/preact.module.js",
+    "preact/hooks": "/static/vendor/hooks.module.js",
+    "htm": "/static/vendor/htm.module.js"
+  }
+}
+</script>
+</head>
+<body data-theme="dark">
+<div id="root"><div class="loading">Loading…</div></div>
+<script type="module" src="/static/app/main.js"></script>
+</body>
+</html>

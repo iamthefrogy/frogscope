@@ -1,0 +1,220 @@
+# Classification rules. All data, no code — edit here rather than in Python.
+
+# ── Environment inference ────────────────────────────────────────────────────
+# Matched against the dot/dash/underscore-separated LABELS of the hostname, as
+# whole tokens. Substring matching is wrong: "data" contains "ta", "latest"
+# contains "test". Longest keyword wins; where two different environments match,
+# `precedence` decides (later = more non-production, and it wins).
+env:
+  default: unclassified
+  precedence: [prod, dr, sandbox, sit, staging, test, uat, ta, dev]
+
+  # Industry-general tokens only. Nothing here is specific to one organisation,
+  # so this list is safe to leave untouched on any target.
+  keywords:
+    prod:     [prod, prd, production, live, www]
+    dr:       [dr, drtest, failover]
+    sandbox:  [sandbox, sbx, demo, poc]
+    sit:      [sit]
+    staging:  [staging, stage, stg, preprod, pre]
+    test:     [test, tst, qa, testing]
+    uat:      [uat]
+    ta:       [ta]
+    dev:      [dev, develop, development, sandpit]
+
+  # YOUR naming conventions go here, merged on top of `keywords` above.
+  #
+  # Every organisation has internal shorthand that means nothing anywhere else —
+  # a bank might call a tier `it2ta`, another shop might use `cftest` or `grn`.
+  # Those belong here, not in the defaults, because a token shipped for everyone
+  # mis-classifies every other estate that happens to use the same string.
+  #
+  # Whole-token matching applies here too, so `ta` will not match `data`.
+  #
+  #   custom_keywords:
+  #     test: [cftest, smoke]
+  #     uat:  [it2tauat, tauat]
+  #     ta:   [it2ta]
+  #
+  # After editing, check the result with:  frogscope query "env:uat" --limit 20
+  custom_keywords: {}
+
+nonprod: [dr, sandbox, sit, staging, test, uat, ta, dev]
+
+# ── Zone overrides ───────────────────────────────────────────────────────────
+# A hostname's zone is normally "everything after the leftmost label". Override
+# when a grouping reads better to a human.
+zone_overrides: {}
+
+# Public-suffix entries needing two labels, for registrable-domain extraction.
+multi_label_tlds: [co.uk, com.au, co.in, co.jp, com.br, co.za, com.sg, org.uk, ac.uk, gov.uk]
+
+# ── Title classification ─────────────────────────────────────────────────────
+# ORDERED — first match wins. `class` feeds KPIs, scoring, and facets.
+title_classes:
+  - class: http_to_https_400
+    label: TLS-only port probed over HTTP
+    match: '^400 The plain HTTP request was sent to HTTPS port'
+    artifact: true
+  - class: cf_block
+    label: Blocked by Cloudflare WAF
+    match: '^Attention Required!\s*\|\s*Cloudflare'
+  - class: cf_challenge
+    label: Cloudflare challenge
+    match: '^Just a moment\.\.\.'
+  - class: azure_unavailable
+    label: Azure Web App unavailable
+    match: '^Web App - Unavailable'
+  - class: azure_404
+    label: Azure Web App 404
+    match: 'Microsoft Azure Web App - Error 404'
+  - class: m365_login
+    label: Microsoft 365 sign-in
+    match: '^Sign in to your account$|^Sign In$'
+  - class: adfs_login
+    label: ADFS sign-in
+    match: 'Active Directory Federation Services|ADFS'
+  - class: mgmt_console
+    label: Management console
+    match: 'Environment Manager|Administration|Admin Console|Control Panel|Management Console|cPanel|WHM|Plesk|phpMyAdmin|Jenkins|Grafana|Kibana|Portainer|SonarQube|Rancher|Consul|Nomad|Vault'
+  - class: generic_login
+    label: Login page
+    match: '\b(log ?in|logon|sign ?in|authenticate|SSO|Single Sign)\b'
+  - class: iis_default
+    label: Default IIS page
+    match: '^IIS Windows Server$|^IIS7?$|^Microsoft Internet Information Services'
+  - class: apache_default
+    label: Default Apache page
+    match: 'Apache2? (Ubuntu |Debian )?Default Page|It works!'
+  - class: nginx_default
+    label: Default nginx page
+    match: 'Welcome to nginx'
+  - class: dir_listing
+    label: Directory listing
+    match: '^Index of /|^Directory Listing'
+  - class: error_debug
+    label: Error / debug page
+    match: 'Whitelabel Error Page|Stack Trace|Exception|Traceback|Server Error in .* Application'
+  - class: api_doc
+    label: API documentation
+    match: 'Swagger|OpenAPI|GraphiQL|Redoc|API Documentation'
+  - class: forbidden
+    label: Forbidden
+    match: '^403 Forbidden$|^Forbidden$|^Access Denied'
+  - class: notfound
+    label: Not found
+    match: '^404( Not Found)?$|^Not Found$'
+  - class: parked
+    label: Parked / placeholder
+    match: 'Coming Soon|Under Construction|Site Not Configured|Future home of'
+
+# Titles that indicate a broken or unavailable application.
+error_titles:
+  - Web App - Unavailable
+  - Microsoft Azure Web App - Error 404
+  - Service Unavailable
+  - Bad Gateway
+  - Gateway Timeout
+
+# ── Authentication surfaces ──────────────────────────────────────────────────
+auth:
+  # Redirect targets that mean "federated to an external identity provider".
+  # Federation is GOOD — the risk is a login surface that is NOT federated.
+  idp_hosts:
+    - login.microsoftonline.com
+    - login.microsoft.com
+    - sts.windows.net
+    - accounts.google.com
+    - okta.com
+    - oktapreview.com
+    - onelogin.com
+    - pingidentity.com
+    - b2clogin.com
+    - auth0.com
+  # host/title token -> auth_surface_type. Ordered, first match wins.
+  types:
+    - {type: m365,            match: 'login\.microsoftonline\.com|sharepoint\.com|outlook\.office'}
+    - {type: adfs,            match: '(^|\.)adfs(\.|$)|federation'}
+    - {type: b2c,            match: 'b2clogin\.com'}
+    - {type: citrix_gateway,  match: '(^|\.)(citrix|netscaler|xenapp)(\.|$)|LogonPoint|/vpn/index\.html'}
+    - {type: sslvpn,          match: '(^|\.)(sslvpn|vpn|anyconnect|globalprotect|pulse)(\.|$)'}
+    - {type: rdweb,           match: 'RDWeb|remoteapp|/rdweb'}
+    - {type: cpanel,          match: '(^|\.)cpanel(\.|$)|whm'}
+  remote_access_types: [citrix_gateway, sslvpn, rdweb]
+  # CPE products that are themselves remote-access appliances.
+  remote_access_cpe:
+    - cisco:adaptive-security-appliance-software
+    - citrix:gateway
+    - citrix:netscaler_application_delivery_controller
+    - microsoft:remote_desktop
+    - pulsesecure:pulse_connect_secure
+    - fortinet:fortios
+
+# ── CNAME suffix -> hosting provider ─────────────────────────────────────────
+# Longest-suffix match wins. `kind` drives the supply-chain view.
+cname_providers:
+  - {suffix: cdn.cloudflare.net,          provider: Cloudflare,             kind: waf}
+  - {suffix: cloudflare.net,              provider: Cloudflare,             kind: waf}
+  - {suffix: cloudfront.net,              provider: Amazon CloudFront,      kind: cdn}
+  - {suffix: elb.amazonaws.com,           provider: AWS ELB,                kind: iaas}
+  - {suffix: s3.amazonaws.com,            provider: Amazon S3,              kind: storage, claimable: true}
+  - {suffix: amazonaws.com,               provider: AWS,                    kind: iaas}
+  - {suffix: azurewebsites.net,           provider: Azure App Service,      kind: paas,    claimable: true}
+  - {suffix: azurefd.net,                 provider: Azure Front Door,       kind: cdn}
+  - {suffix: tm-azurefd.net,              provider: Azure Front Door,       kind: cdn}
+  - {suffix: trafficmanager.net,          provider: Azure Traffic Manager,  kind: dns,     claimable: true}
+  - {suffix: cloudapp.azure.com,          provider: Azure Cloud Service,    kind: iaas,    claimable: true}
+  - {suffix: msappproxy.net,              provider: Entra ID App Proxy,     kind: app_proxy}
+  - {suffix: appproxy.msidentity.com,     provider: Entra ID App Proxy,     kind: app_proxy}
+  - {suffix: msidentity.com,              provider: Entra ID,               kind: identity}
+  - {suffix: wpeproxy.com,                provider: WP Engine,              kind: paas,    claimable: true}
+  - {suffix: wpenginepowered.com,         provider: WP Engine,              kind: paas,    claimable: true}
+  - {suffix: unbouncepages.com,           provider: Unbounce,               kind: saas,    claimable: true}
+  - {suffix: actonsoftware.com,           provider: Act-On,                 kind: saas}
+  - {suffix: en25.com,                    provider: Oracle Eloqua,          kind: saas}
+  - {suffix: ivanticloud.com,             provider: Ivanti Cloud,           kind: saas}
+  - {suffix: github.io,                   provider: GitHub Pages,           kind: paas,    claimable: true}
+  - {suffix: herokuapp.com,               provider: Heroku,                 kind: paas,    claimable: true}
+  - {suffix: akamaiedge.net,              provider: Akamai,                 kind: cdn}
+  - {suffix: akamai.net,                  provider: Akamai,                 kind: cdn}
+  - {suffix: fastly.net,                  provider: Fastly,                 kind: cdn}
+  - {suffix: oraclecloud.com,             provider: Oracle Cloud,           kind: iaas}
+  - {suffix: netlify.app,                 provider: Netlify,                kind: paas,    claimable: true}
+  - {suffix: zendesk.com,                 provider: Zendesk,                kind: saas,    claimable: true}
+  - {suffix: statuspage.io,               provider: Statuspage,             kind: saas,    claimable: true}
+
+# Providers that are edge/CDN — a host fronted by these is not origin-exposed.
+cdn_provider_kinds: [waf, cdn]
+
+# ── Cloudflare origin-error decoding ─────────────────────────────────────────
+# These separate "the hostname points at nothing we control" (takeover signal)
+# from "our origin is misconfigured" (an availability bug). Conflating them
+# produces false takeover alerts.
+# Which detected CDN names the origin-error decoding and WAF-block detection
+# apply to. These status codes mean what they mean because Cloudflare defines
+# them, so attributing them to another provider's 5xx would be wrong.
+origin_error_providers: [cloudflare]
+
+cf_error_codes:
+  520: {code: 520, health: unreachable,  label: Origin returned an empty/unknown response}
+  521: {code: 521, health: unreachable,  label: Origin web server is down}
+  522: {code: 522, health: unreachable,  label: Connection to origin timed out}
+  523: {code: 523, health: unreachable,  label: Origin is unreachable}
+  524: {code: 524, health: unreachable,  label: Origin timed out responding}
+  525: {code: 525, health: tls_broken,   label: SSL handshake with origin failed}
+  526: {code: 526, health: tls_broken,   label: Origin presented an invalid certificate}
+  530: {code: 1016, health: dns_missing, label: Origin DNS record does not resolve}
+
+# ── Sensitive hostname keywords ──────────────────────────────────────────────
+# Words in a hostname suggesting the service handles something valuable. Used to
+# raise a finding's sensitivity, never to assert a breach.
+#
+# These defaults lean towards finance and general IT because those words recur
+# across most estates. TUNE THEM: a hospital cares about `patient`, `ehr` and
+# `pacs`; a retailer about `checkout`, `pos` and `warehouse`; a university about
+# `student`, `grades` and `admissions`. A word absent here simply carries no
+# bonus — nothing breaks, you just lose signal.
+sensitive_keywords:
+  high:   [pay, payment, invoice, billing, finance, treasury, swift, settlement, hr, payroll, backup, dump]
+  medium: [admin, internal, intranet, db, sql, database, oracle, mongo, redis, kafka, jira, confluence, gitlab, jenkins]
+  low:    [api, portal, mail, smtp, ftp, files, docs, reports]

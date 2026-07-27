@@ -1,0 +1,1154 @@
+# Risk rules.
+#
+# Every weight, threshold, and bucket cap lives here. These numbers will be
+# argued about, and an executive will ask "why 72?" — so the engine keeps the
+# full contribution trace for each endpoint and the UI renders it as a waterfall.
+#
+# The rule shape is a structured predicate tree rather than an expression string.
+# That keeps it safe to load (no eval), serialisable so the UI can display a
+# rule's own definition next to its findings, and unit-testable in isolation.
+
+version: 2
+
+scale:
+  max: 100
+  # Bands are calibrated to what THIS rule set can actually produce, not to a
+  # notional 0-100. Bucket caps (40/30/30) mean a score above ~50 requires
+  # serious problems in all three buckets at once, which is rare — so thresholds
+  # of 80/60 would leave the top two bands permanently empty and every real
+  # problem sitting in "info".
+  #
+  # Run `frogscope rules coverage` after changing any weight: it reports the
+  # observed band distribution and warns when a band is empty or swallows more
+  # than half the estate, which are the two ways a scale goes bad.
+  bands:
+    - {name: critical, min: 65}
+    - {name: high,     min: 45}
+    - {name: medium,   min: 25}
+    - {name: low,      min: 10}
+    - {name: info,     min: 0}
+
+buckets:
+  exposure:
+    cap: 40
+    label: Exposure
+    exec_label: How reachable it is
+  hygiene:
+    cap: 30
+    label: Hygiene
+    exec_label: How well maintained it is
+  sensitivity:
+    cap: 30
+    label: Sensitivity
+    exec_label: How valuable it is to an attacker
+
+# A triggered `critical` rule can never end up below `high`, no matter what the
+# modifiers do. Without this, MOD_WAF's 0.45 multiplier would let Cloudflare hide
+# an end-of-life operating system.
+severity_floor: high
+
+# Only the highest-weight rule in a family counts in full; its siblings
+# contribute at this fraction. Three overlapping symptoms of one underlying
+# problem should not score triple.
+families:
+  overlap_factor: 0.30
+
+# Rows excluded from scoring entirely. They stay visible in the grid behind a
+# filter, and are counted in Coverage, but they are not risk.
+exclusions:
+  - id: EXCL_SCAN_ARTIFACT
+    when: {field: scan_artifact, op: truthy}
+    reason: >
+      httpx probed a TLS-only port over cleartext. The 400 response is the
+      server behaving correctly, not a misconfiguration.
+
+# Modifiers stack multiplicatively, so a WAF (0.45) on a Cloudflare alias port
+# (0.25) would multiply out to 0.11 and erase the score. The combined product
+# is clamped to this floor: a mitigation should reduce urgency, not delete a
+# finding.
+modifier_floor: 0.30
+
+# Multiplicative, applied after family de-duplication. Each states plainly why
+# it moves the number, because a modifier that silently divides a score by two
+# is indistinguishable from a bug.
+modifiers:
+  - id: MOD_WAF
+    when: {field: response_class, op: in, value: [waf_blocked, waf_challenge]}
+    factor: 0.45
+    reason: >
+      A Cloudflare WAF is blocking or challenging this request, so exploitation
+      would need a WAF bypass first.
+
+  - id: MOD_CF_ALIAS
+    when: {field: cf_alias_port, op: truthy}
+    factor: 0.25
+    reason: >
+      A Cloudflare proxy alias port serving the same origin site as :443. It is
+      not an additional service, so it should not be scored as one.
+
+  - id: MOD_AUTH
+    when: {field: auth_required, op: truthy}
+    factor: 0.75
+    reason: Authentication is required before reaching application logic.
+
+  - id: MOD_FEDERATED
+    when: {field: federated_auth, op: truthy}
+    factor: 0.85
+    reason: >
+      Authentication is delegated to an external identity provider, so no
+      credentials are handled here.
+
+  - id: MOD_NONPROD
+    when: {field: env, op: in, value: [dev, test, uat, ta, sit, staging, sandbox]}
+    factor: 0.80
+    reason: >
+      Non-production, so the data impact is lower — though non-production
+      environments often have weaker controls.
+
+  - id: MOD_ALIAS_DUPLICATE
+    when: {all: [{field: content_cluster_size, op: gte, value: 20},
+                 {field: cf_alias_port, op: truthy}]}
+    factor: 0.50
+    reason: >
+      One of many endpoints returning byte-identical content — the same
+      application counted repeatedly.
+
+rules:
+
+  # ── Takeover ──────────────────────────────────────────────────────────────
+  - id: TAKEOVER_HIGH
+    family: takeover
+    bucket: exposure
+    points: 40
+    severity: critical
+    confidence: probable
+    when: {field: takeover_grade, op: eq, value: high}
+    title: Likely dangling DNS record
+    why: >
+      This hostname points at {takeover_provider}, and the response matches that
+      provider's "resource does not exist" fingerprint. If the name can be
+      re-registered there, an outsider could serve content on a company domain.
+    exec_line: A company hostname points at infrastructure nobody controls.
+    remediation: >
+      Either remove the DNS record, or re-claim the resource at the provider
+      before someone else does.
+
+  - id: TAKEOVER_MEDIUM
+    family: takeover
+    bucket: exposure
+    points: 20
+    severity: high
+    confidence: possible
+    when: {field: takeover_grade, op: eq, value: medium}
+    title: Possible dangling DNS record
+    why: >
+      Delegated to {takeover_provider}, where unclaimed names can be registered
+      by anyone, and it is not currently serving content.
+    exec_line: A hostname may point at a service that is no longer ours.
+    remediation: Confirm the target still belongs to us, or delete the record.
+
+  - id: ORIGIN_UNREACHABLE
+    family: takeover
+    bucket: exposure
+    points: 14
+    severity: high
+    confidence: confirmed
+    when: {field: origin_health, op: eq, value: dns_missing}
+    title: Edge cannot resolve the origin
+    why: >
+      Cloudflare returns error 1016 — the origin DNS record does not resolve.
+      The hostname is published and proxied but points at nothing.
+    exec_line: A published hostname leads nowhere, which may mean it was left behind.
+    remediation: >
+      Restore the origin record if the service is meant to exist, otherwise
+      remove the hostname from DNS and from the Cloudflare zone.
+
+  # ── Software lifecycle ────────────────────────────────────────────────────
+  - id: EOL_SOFTWARE
+    family: lifecycle
+    bucket: hygiene
+    map:
+      field: eol_worst_severity
+      values: {critical: 24, high: 16, medium: 9, low: 4}
+    severity: critical
+    confidence: probable
+    requires_fields: [eol_products]
+    when: {field: eol_count, op: gte, value: 1}
+    title: End-of-life software
+    why: >
+      Fingerprinting indicates {eol_summary}. Software past end of life receives
+      no security patches, so no amount of configuration makes it safe.
+    exec_line: >
+      Software the vendor stopped supporting is still running and reachable from
+      the internet.
+    remediation: >
+      Upgrade to a supported release, or remove the endpoint from the internet
+      and place it behind the VPN.
+
+  - id: EOL_AGE
+    family: lifecycle
+    bucket: hygiene
+    scaled: {field: eol_years_past, per: 1, max: 8}
+    severity: high
+    confidence: probable
+    when: {field: eol_years_past, op: gte, value: 1}
+    title: Unsupported for years
+    why: Unsupported for roughly {eol_years_past} years.
+    exec_line: Some software has been unsupported for years, not months.
+    remediation: Treat the oldest of these as the first migration priority.
+
+  - id: OUTDATED_COMPONENT
+    family: lifecycle
+    bucket: hygiene
+    scaled: {field: outdated_count, per: 4, max: 10}
+    severity: medium
+    confidence: probable
+    when: {field: outdated_count, op: gte, value: 1}
+    title: Outdated components
+    why: "Behind the configured minimum safe version: {outdated_summary}."
+    exec_line: Some components are running older releases than we allow.
+    remediation: Update the components listed, then re-scan to confirm.
+
+  - id: SUSPECTED_VULN_FAMILY
+    family: vuln
+    bucket: sensitivity
+    map:
+      field: vuln_worst_severity
+      values: {critical: 22, high: 16, medium: 8, info: 0}
+    severity: high
+    confidence: possible
+    when: {field: vuln_family_count, op: gte, value: 1}
+    title: Product with a known exploit history
+    why: >
+      {vuln_summary}. This is a banner fingerprint, not a confirmed
+      vulnerability — it means the instance is worth checking, not that it is
+      exploitable.
+    exec_line: Products with a history of serious flaws are exposed.
+    remediation: >
+      Confirm the running build, apply vendor advisories, and consider whether
+      the service needs to be public at all.
+
+  # ── Management and remote access ──────────────────────────────────────────
+  - id: MGMT_CONSOLE_NO_AUTH
+    family: mgmt
+    bucket: exposure
+    points: 34
+    severity: critical
+    confidence: probable
+    # Inert until httpx is run with -body-preview. Whether a management page
+    # actually asks for credentials cannot be told from a status code and a
+    # title: a 1.2KB page titled "Environment Manager" returning 200 may well be
+    # a login form. Asserting "no authentication" from that would put hundreds of
+    # endpoints at critical on a guess, so the rule waits for evidence.
+    requires_fields: [body_preview]
+    when:
+      all:
+        - {field: mgmt_surface, op: truthy}
+        - {field: serves_content, op: truthy}
+        - {field: auth_required, op: falsy}
+        - {field: body_preview, op: not_in,
+           value: ["", null]}
+    title: Management console with no authentication
+    why: >
+      A management or administration interface returns application content
+      without asking for credentials.
+    exec_line: An administrative console is open to the internet without a login.
+    remediation: >
+      Put it behind SSO or the VPN immediately. If it must stay public, enforce
+      authentication at the edge.
+
+  - id: MGMT_CONSOLE_PUBLIC
+    family: mgmt
+    bucket: sensitivity
+    points: 16
+    severity: high
+    confidence: confirmed
+    when: {all: [{field: mgmt_surface, op: truthy},
+                 {field: serves_content, op: truthy}]}
+    title: Management console reachable from the internet
+    why: >
+      Administrative interfaces are high-value targets and rarely need to be
+      publicly reachable.
+    exec_line: Administrative interfaces are reachable from the public internet.
+    remediation: Restrict to the corporate network or an SSO-protected gateway.
+
+  - id: REMOTE_ACCESS_PORTAL
+    family: remote_access
+    bucket: exposure
+    points: 20
+    severity: high
+    confidence: confirmed
+    when: {field: remote_access_exposed, op: truthy}
+    title: Remote-access portal exposed
+    why: >
+      A VPN, Citrix, or remote-desktop gateway is internet-facing. These are
+      necessarily public, but they are also the most heavily targeted appliances
+      in any estate.
+    exec_line: Remote-access gateways are internet-facing, as they must be.
+    remediation: >
+      Confirm the appliance is on a current build, enforce multi-factor
+      authentication, and monitor authentication logs closely.
+
+  # ── Encryption ────────────────────────────────────────────────────────────
+  - id: AUTH_OVER_PLAINTEXT
+    family: encryption
+    bucket: exposure
+    points: 30
+    severity: critical
+    confidence: confirmed
+    when: {all: [{field: auth_surface, op: truthy},
+                 {field: scheme, op: eq, value: http},
+                 {field: no_tls_redirect, op: truthy}]}
+    title: Login served over unencrypted HTTP
+    why: Credentials submitted here would cross the network in clear text.
+    exec_line: A login page is served without encryption.
+    remediation: Redirect all HTTP traffic to HTTPS and enable HSTS.
+
+  - id: PLAINTEXT_NO_UPGRADE
+    family: encryption
+    bucket: hygiene
+    points: 12
+    severity: high
+    confidence: confirmed
+    when: {field: no_tls_redirect, op: truthy}
+    title: Serves content over HTTP with no upgrade
+    why: >
+      Returns content over plain HTTP and never redirects to HTTPS, so traffic
+      is readable and modifiable in transit.
+    exec_line: Some sites still serve unencrypted traffic.
+    remediation: Add a permanent redirect to HTTPS, then enable HSTS.
+
+  - id: HSTS_MISSING
+    family: encryption
+    bucket: hygiene
+    points: 6
+    severity: low
+    confidence: confirmed
+    when: {all: [{field: scheme, op: eq, value: https},
+                 {field: serves_content, op: truthy},
+                 {field: hsts_present, op: falsy}]}
+    title: HSTS not enabled
+    why: >
+      Without HSTS a first visit over HTTP can be intercepted before the
+      redirect to HTTPS takes effect.
+    exec_line: Some HTTPS sites do not instruct browsers to stay on HTTPS.
+    remediation: "Add Strict-Transport-Security with a max-age of at least one year."
+
+  - id: ORIGIN_TLS_BROKEN
+    family: encryption
+    bucket: hygiene
+    points: 14
+    severity: medium
+    confidence: confirmed
+    when: {field: origin_health, op: eq, value: tls_broken}
+    title: Edge cannot complete TLS to the origin
+    why: >
+      Cloudflare reports a failed TLS handshake with the origin (error 525 or
+      526) — an expired, self-signed, or mismatched origin certificate. Note
+      this is a broken origin, not a dangling one.
+    exec_line: The connection between our edge and our own servers is broken.
+    remediation: >
+      Fix or replace the origin certificate, or set the Cloudflare SSL mode to
+      match what the origin actually presents.
+
+  # ── Exposure ──────────────────────────────────────────────────────────────
+  - id: ORIGIN_REACHED_DIRECTLY
+    family: protection
+    bucket: exposure
+    points: 18
+    severity: high
+    confidence: confirmed
+    when: {field: origin_exposed, op: truthy}
+    title: Origin reachable with no proxy
+    why: >
+      Serving content with no CDN, WAF, or managed platform in the path — the
+      internet reaches this server directly. {origin_exposure_reason}
+    exec_line: Some servers are reached directly from the internet, with nothing in front.
+    remediation: >
+      Place the service behind the CDN or WAF, then restrict the origin to
+      accept traffic only from those edge ranges.
+
+  - id: NO_WAF
+    family: protection
+    bucket: exposure
+    points: 8
+    severity: medium
+    confidence: confirmed
+    when: {field: no_waf, op: truthy}
+    title: No WAF inspecting traffic
+    why: >
+      Serving content with no WAF or CDN inspecting requests. There may still be
+      a platform or proxy in the path, but nothing is filtering attacks.
+    exec_line: Some services have no web application firewall in front of them.
+    remediation: Route the hostname through the WAF.
+
+  - id: WAF_BYPASSABLE
+    family: protection
+    bucket: exposure
+    points: 26
+    severity: critical
+    confidence: probable
+    when: {field: cdn_bypass_candidate, op: truthy}
+    title: WAF appears bypassable
+    why: >
+      This host is WAF-protected on one port while another port on the same host
+      is reachable directly. An attacker can take the unprotected path and skip
+      the WAF entirely, which makes the WAF's protection notional.
+    exec_line: >
+      On some hosts the firewall can be side-stepped by using a different port.
+    remediation: >
+      Route every listening port through the edge, or firewall the direct ports
+      so only the edge can reach them.
+
+  - id: UNPROTECTED
+    family: protection
+    bucket: exposure
+    points: 16
+    severity: high
+    confidence: confirmed
+    when: {field: unprotected, op: truthy}
+    title: No protective layer at all
+    why: >
+      Serving content with no WAF or CDN, no authentication, and no TLS. All
+      three controls are absent.
+    exec_line: A few services have no protection of any kind.
+    remediation: Add TLS first, then authentication, then edge protection.
+
+  - id: NONSTD_PORT_LIVE
+    family: port_exposure
+    bucket: exposure
+    points: 10
+    severity: medium
+    confidence: confirmed
+    when:
+      all:
+        - {field: nonstd_port, op: truthy}
+        - {field: cf_alias_port, op: falsy}
+        - {field: serves_content, op: truthy}
+    title: Service on a non-standard port
+    why: >
+      Listening on port {port}, which is outside the standard web ports and is
+      not a Cloudflare proxy alias. Services on unusual ports are often
+      forgotten deployments outside normal change control.
+    exec_line: Services are running on unusual ports, which suggests they are unmanaged.
+    remediation: >
+      Confirm the service is intentional and inventoried. If not, decommission
+      it.
+
+  - id: APP_SERVER_PORT
+    family: port_exposure
+    bucket: sensitivity
+    points: 14
+    severity: high
+    confidence: probable
+    when: {all: [{field: port_category, op: eq, value: app_server},
+                 {field: serves_content, op: truthy}]}
+    title: Application server port exposed
+    why: >
+      Port {port} is typically an application server rather than a web front
+      end. These usually expose administrative consoles and deployment
+      interfaces that were never meant to be public.
+    exec_line: Application server admin ports are internet-facing.
+    remediation: Firewall the port and reach the console through the VPN instead.
+
+  - id: NONPROD_INTERNET_FACING
+    family: nonprod
+    bucket: sensitivity
+    points: 14
+    severity: medium
+    confidence: confirmed
+    when: {field: is_nonprod_exposed, op: truthy}
+    title: Non-production environment reachable
+    why: >
+      A {env} environment is serving content on the internet. Non-production
+      systems typically carry weaker controls, real data copies, and verbose
+      error output.
+    exec_line: Test and development systems are reachable from the internet.
+    remediation: >
+      Restrict non-production to the corporate network, or require SSO in front
+      of it.
+
+  - id: INTERNAL_APP_PUBLISHED
+    family: published
+    bucket: sensitivity
+    points: 8
+    severity: medium
+    confidence: confirmed
+    when: {field: azure_app_proxy, op: truthy}
+    title: Internal application published externally
+    why: >
+      Published through Entra ID Application Proxy, which means an internal
+      application is deliberately internet-facing. Pre-authentication normally
+      applies, so this is inventory awareness rather than a defect.
+    exec_line: Internal applications are published to the internet on purpose.
+    remediation: >
+      Confirm pre-authentication is enforced on each published application and
+      that the list matches what the business expects.
+
+  # ── Hygiene ───────────────────────────────────────────────────────────────
+  - id: DEFAULT_INSTALL_PAGE
+    family: hygiene
+    bucket: hygiene
+    points: 14
+    severity: high
+    confidence: confirmed
+    when: {field: title_class, op: in,
+           value: [iis_default, apache_default, nginx_default]}
+    title: Default server page
+    why: >
+      Serving the web server's stock welcome page, which means a listener is
+      exposed with no application deployed on it. These are typically
+      unmonitored and unpatched.
+    exec_line: Some servers show a default installation page, so they are unfinished.
+    remediation: Remove the listener, or deploy and monitor the intended application.
+
+  - id: DIRECTORY_LISTING
+    family: hygiene
+    bucket: sensitivity
+    points: 18
+    severity: high
+    confidence: confirmed
+    when: {field: title_class, op: eq, value: dir_listing}
+    title: Directory listing enabled
+    why: Returns a browsable file index, disclosing filenames and structure.
+    exec_line: Some servers list their files to anyone who asks.
+    remediation: Disable automatic indexing on the web server.
+
+  - id: ERROR_DEBUG_PAGE
+    family: hygiene
+    bucket: sensitivity
+    points: 16
+    severity: high
+    confidence: confirmed
+    when: {field: title_class, op: eq, value: error_debug}
+    title: Debug or stack-trace page
+    why: >
+      Returns an unhandled error page, which commonly leaks framework versions,
+      file paths, and sometimes credentials.
+    exec_line: Some applications show internal error details to visitors.
+    remediation: Turn off debug output in production and return a generic error page.
+
+  - id: SERVER_ERROR
+    family: hygiene
+    bucket: hygiene
+    points: 8
+    severity: medium
+    confidence: confirmed
+    when: {all: [{field: status_code, op: gte, value: 500},
+                 {field: origin_health, op: eq, value: ok}]}
+    title: Application returning a server error
+    why: >
+      Responds {status_code}. An endpoint erroring consistently is either broken
+      or unmaintained, and either way nobody is watching it.
+    exec_line: Some services are returning errors.
+    remediation: Fix or decommission it, and add monitoring so this is noticed sooner.
+
+  - id: VERSION_DISCLOSURE
+    family: hygiene
+    bucket: hygiene
+    points: 4
+    severity: low
+    confidence: confirmed
+    when: {field: version_disclosure, op: truthy}
+    title: Server version disclosed
+    why: >
+      The Server header advertises {webserver}, which lets an attacker match
+      known vulnerabilities without probing.
+    exec_line: Some servers announce their exact software version.
+    remediation: Suppress the version from the Server header.
+
+  - id: SERVER_INCONSISTENT
+    family: hygiene
+    bucket: hygiene
+    points: 5
+    severity: low
+    confidence: probable
+    when: {field: server_header_inconsistent, op: truthy}
+    title: Different web servers on one host
+    why: >
+      Ports on this host report different server software, which usually means a
+      second, separately-managed service is running alongside the main one.
+    exec_line: Some hosts run more than one distinct service, which may be unintended.
+    remediation: Confirm each listener is intentional and inventoried.
+
+  # ── Sensitivity ───────────────────────────────────────────────────────────
+  - id: SENSITIVE_HOSTNAME
+    family: business
+    bucket: sensitivity
+    map:
+      field: sensitive_keyword_severity
+      values: {high: 14, medium: 8, low: 3}
+    severity: medium
+    confidence: possible
+    when: {field: sensitive_keyword_severity, op: exists}
+    title: Sensitive function suggested by the hostname
+    why: >
+      The hostname contains "{sensitive_keyword}", suggesting it handles
+      material data or privileged function. Naming is a hint, not proof.
+    exec_line: Some hostnames suggest they handle payments, HR, or internal data.
+    remediation: Confirm the classification and apply controls to match.
+
+  - id: API_SURFACE
+    family: business
+    bucket: sensitivity
+    points: 6
+    severity: low
+    confidence: confirmed
+    when: {field: api_surface, op: truthy}
+    title: API endpoint
+    why: >
+      Returns a structured data content type, so it is an API rather than a web
+      page. APIs need authorisation checked per object, not just per route.
+    exec_line: Some endpoints are APIs and need their own authorisation review.
+    remediation: Confirm authentication, rate limiting, and object-level authorisation.
+
+  - id: CONCENTRATION_RISK
+    family: concentration
+    bucket: sensitivity
+    points: 7
+    severity: medium
+    confidence: confirmed
+    when: {field: concentration_risk, op: truthy}
+    title: Large shared-infrastructure blast radius
+    why: >
+      This address serves {ip_cluster_size} hostnames. Anything that compromises
+      or takes down this one address affects all of them at once.
+    exec_line: A single address carries a large share of the estate.
+    remediation: >
+      Confirm the concentration is deliberate, and that failure of this address
+      is covered by the continuity plan.
+
+  - id: SHARED_INFRA
+    family: concentration
+    bucket: sensitivity
+    points: 3
+    severity: low
+    confidence: confirmed
+    when: {field: shared_infra, op: truthy}
+    title: Shared infrastructure
+    why: Shares an address with {ip_cluster_size} other hostnames.
+    exec_line: Several services share the same servers.
+    remediation: No action needed unless isolation is required for compliance.
+
+  - id: THIRD_PARTY_SAAS
+    family: dependency
+    bucket: sensitivity
+    points: 5
+    severity: low
+    confidence: confirmed
+    when: {field: third_party_dependency, op: eq, value: saas}
+    title: Third-party hosted
+    why: >
+      Served by {hosting_provider}, so availability and security depend on a
+      supplier and the content is outside our change control.
+    exec_line: Some public pages are hosted by outside suppliers.
+    remediation: Confirm the supplier is contracted, reviewed, and inventoried.
+
+  # ── Positive controls. Zero points; shown as green chips so the UI can
+  #    report what is working, not only what is broken.
+  - id: POS_WAF
+    family: positive
+    bucket: exposure
+    points: 0
+    severity: info
+    confidence: confirmed
+    when: {field: waf_protected, op: truthy}
+    title: WAF protected
+    why: A WAF or CDN is inspecting traffic to this endpoint.
+    exec_line: ""
+    remediation: ""
+
+  - id: POS_FEDERATED
+    family: positive
+    bucket: exposure
+    points: 0
+    severity: info
+    confidence: confirmed
+    when: {field: federated_auth, op: truthy}
+    title: Federated authentication
+    why: >
+      Authentication is delegated to an external identity provider, so no
+      credentials are handled here.
+    exec_line: ""
+    remediation: ""
+
+  - id: POS_HSTS
+    family: positive
+    bucket: hygiene
+    points: 0
+    severity: info
+    confidence: confirmed
+    when: {field: hsts_present, op: truthy}
+    title: HSTS enabled
+    why: Browsers are instructed to use HTTPS only.
+    exec_line: ""
+    remediation: ""
+
+  # ── Reserved: written now, inert until httpx is run with -tls-grab.
+  #    `requires_fields` makes them SKIP rather than score, which is the whole
+  #    point — awarding points for data we never collected would put every
+  #    endpoint at the same score and make the ranking meaningless.
+  - id: CERT_EXPIRED
+    family: certificate
+    bucket: hygiene
+    points: 24
+    severity: critical
+    confidence: confirmed
+    requires_fields: [cert_days_remaining]
+    # `serves_content` guard added with v2: without it, a dead port that
+    # merely still returns a stale TLS handshake scores as a critical
+    # finding, and the severity_floor then pins the whole endpoint's band —
+    # found while adding tlsx's real cert data alongside this rule.
+    when: {all: [{field: cert_days_remaining, op: lte, value: 0},
+                 {field: serves_content, op: truthy}]}
+    title: TLS certificate expired
+    why: The certificate expired {cert_days_remaining} days ago.
+    exec_line: Some certificates have expired, so browsers show a warning.
+    remediation: Renew and deploy the certificate, then automate renewal.
+
+  - id: CERT_EXPIRING_SOON
+    family: certificate
+    bucket: hygiene
+    points: 12
+    severity: high
+    confidence: confirmed
+    requires_fields: [cert_days_remaining]
+    when: {all: [{field: cert_days_remaining, op: gt, value: 0},
+                 {field: cert_days_remaining, op: lte, value: 30},
+                 {field: serves_content, op: truthy}]}
+    title: TLS certificate expiring within 30 days
+    why: The certificate expires in {cert_days_remaining} days.
+    exec_line: Some certificates expire within a month.
+    remediation: Renew now and automate renewal.
+
+  - id: TLS_LEGACY_VERSION
+    family: certificate
+    bucket: hygiene
+    points: 16
+    severity: high
+    confidence: confirmed
+    requires_fields: [tls_version]
+    when: {field: tls_version, op: matches, value: '^(SSLv|TLSv1\.0|TLSv1\.1)'}
+    title: Legacy TLS version offered
+    why: Negotiates {tls_version}, which is deprecated and known to be weak.
+    exec_line: Some services still accept outdated encryption.
+    remediation: "Require TLS 1.2 as a minimum, and prefer TLS 1.3."
+
+  # ── v2: certificates, from tlsx. tlsx replaces httpx's partial view above
+  #    with real trust/mismatch/SAN data — see tests/fixtures/correlation/
+  #    README.md for the confirmed behaviour these rely on (misconfig
+  #    booleans are OMITTED from the JSON when false, never present as
+  #    `false` — `requires_fields` plus a plain truthy check handles that
+  #    correctly without any extra work here).
+  - id: CERT_SELF_SIGNED
+    family: certificate
+    bucket: hygiene
+    points: 14
+    severity: high
+    confidence: confirmed
+    requires_fields: [cert_self_signed]
+    when: {all: [{field: cert_self_signed, op: truthy},
+                 {field: serves_content, op: truthy}]}
+    title: Self-signed certificate on a live service
+    why: >
+      The certificate is signed by itself, so no browser or client can verify
+      it. Users are trained to click through the warning, which is exactly
+      the habit that makes interception work.
+    exec_line: Some public services use certificates no browser will trust.
+    remediation: >
+      Issue a certificate from a trusted authority. If the service is
+      internal, take it off the public internet rather than accepting the
+      warning.
+
+  - id: CERT_HOSTNAME_MISMATCH
+    family: certificate
+    bucket: hygiene
+    points: 12
+    severity: high
+    confidence: confirmed
+    requires_fields: [cert_mismatched]
+    when: {all: [{field: cert_mismatched, op: truthy},
+                 {field: serves_content, op: truthy}]}
+    title: Certificate does not match the hostname
+    why: >
+      The certificate presented is for {cert_subject_cn}, not this hostname.
+      Either the wrong virtual host answers by default, or this name points
+      at infrastructure belonging to somebody else.
+    exec_line: Some services present a certificate for the wrong name.
+    remediation: >
+      Confirm which service should answer on this name. A mismatch is often
+      the first visible sign of a stale DNS record pointing at reassigned
+      hosting.
+
+  - id: CERT_WILDCARD_OVERBROAD
+    family: certificate
+    bucket: hygiene
+    points: 8
+    severity: medium
+    confidence: possible
+    requires_fields: [cert_wildcard, cert_host_count]
+    when: {all: [{field: cert_wildcard, op: truthy},
+                 {field: cert_host_count, op: gte, value: 20}]}
+    title: One wildcard certificate deployed very widely
+    why: >
+      A single wildcard certificate for {cert_wildcard_scope} is presented by
+      {cert_host_count} hosts, so one stolen private key covers all of them —
+      including any host that should never have had it.
+    exec_line: One certificate key protects a large part of the estate at once.
+    remediation: >
+      Split the wildcard per environment or per tier so a compromise on a
+      development host does not hand over production. Prefer short-lived
+      per-host certificates where automation allows.
+
+  - id: CERT_COVERS_FOREIGN_DOMAINS
+    family: certificate
+    bucket: sensitivity
+    points: 6
+    severity: medium
+    confidence: possible
+    requires_fields: [cert_foreign_domain_count]
+    when: {field: cert_foreign_domain_count, op: gte, value: 1}
+    title: Certificate also covers domains we do not own
+    why: >
+      This certificate names {cert_foreign_domain_count} registrable
+      domain(s) outside our portfolio. Either this host is on shared
+      infrastructure with other tenants, or a supplier's certificate is
+      terminating our traffic — worth knowing about deliberately rather than
+      by accident.
+    exec_line: Some certificates are shared with organisations outside ours.
+    remediation: >
+      Confirm the arrangement is contracted and intended. If the host is
+      ours, it should present a certificate naming only our domains.
+
+  - id: TLS_WEAK_CIPHER
+    family: certificate
+    bucket: hygiene
+    points: 10
+    severity: medium
+    confidence: confirmed
+    requires_fields: [tls_cipher_grade]
+    when: {field: tls_cipher_grade, op: in, value: [weak, insecure]}
+    title: Weak TLS cipher negotiated
+    why: Negotiates {tls_cipher}, which is classed as {tls_cipher_grade}.
+    exec_line: Some services still negotiate outdated encryption.
+    remediation: >
+      Restrict the cipher suite list to modern AEAD ciphers and require
+      TLS 1.2 as a minimum.
+
+  # ── v2: network correlation, from dnsx and mapcidr ──────────────────────
+  - id: DANGLING_A_RECORD
+    family: takeover
+    bucket: exposure
+    points: 22
+    severity: critical
+    confidence: possible
+    requires_fields: [dangling_a_record]
+    when: {field: dangling_a_record, op: truthy}
+    title: DNS record points into an unclaimed cloud range
+    why: >
+      This name resolves into an address block belonging to
+      {claimable_provider}, and nothing here is answering. Anyone who can
+      obtain a fresh address from the same provider inherits this hostname —
+      and with it, any cookie, certificate, or trust attached to the name.
+    exec_line: Some DNS records point at cloud addresses nobody is using.
+    remediation: >
+      Remove the record, or claim the address. Confirm first whether the
+      service was decommissioned without its DNS being cleaned up — that is
+      the usual cause.
+
+  - id: SHARED_HOSTING_FOREIGN
+    family: concentration
+    bucket: sensitivity
+    scaled: {field: ip_foreign_domain_count, per: 1, max: 12}
+    severity: medium
+    confidence: confirmed
+    requires_fields: [ip_foreign_domain_count]
+    when: {field: ip_foreign_domain_count, op: gte, value: 5}
+    title: Address shared with unrelated organisations
+    why: >
+      This address also serves {ip_foreign_domain_count} registrable
+      domain(s) belonging to other organisations. A neighbour's compromise, or
+      a neighbour's abuse getting the address blocklisted, becomes our problem
+      too.
+    exec_line: Some services sit on addresses shared with strangers.
+    remediation: >
+      Confirm this is intended shared hosting. Anything handling sensitive
+      data or authentication belongs on an address we control alone.
+
+  - id: PTR_MISMATCH
+    family: hygiene
+    bucket: hygiene
+    points: 3
+    severity: low
+    confidence: confirmed
+    requires_fields: [ptr_host]
+    when: {all: [{field: ptr_mismatch, op: truthy},
+                 {field: serves_content, op: truthy}]}
+    title: Reverse DNS does not match
+    why: >
+      The address answers to {ptr_host} rather than to this hostname.
+      Harmless on shared or cloud hosting, but on infrastructure we run it
+      usually means a record was left behind after a migration.
+    exec_line: Some addresses have reverse DNS that no longer matches.
+    remediation: >
+      Align reverse DNS where the address is ours. Where it is not, note the
+      third-party dependency instead.
+
+  - id: POS_CERT_AUTOMATED
+    family: positive
+    bucket: hygiene
+    points: 0
+    severity: info
+    confidence: confirmed
+    requires_fields: [cert_age_days, cert_issuer_org]
+    when: {all: [{field: cert_issuer_org, op: matches,
+                  value: "(?i)let's encrypt|zerossl|google trust|buypass|amazon"},
+                 {field: cert_age_days, op: lte, value: 90}]}
+    title: Certificate renewal is automated
+    why: >
+      Issued recently by an ACME-style authority, so renewal is almost
+      certainly automated and expiry is not a standing risk here.
+    exec_line: ""
+    remediation: ""
+
+  # ── Passive product exposure ───────────────────────────────────────────────
+  # These consume config/fingerprints.yaml. The catalogue says WHAT is reachable;
+  # these rules decide whether it matters. Splitting the two is what lets "we
+  # found a Grafana" and "a public Grafana is worth 30 points" be argued about
+  # separately.
+  #
+  # Grouped by authority rather than product, because that is what a reviewer
+  # acts on. A public Grafana is embarrassing; a public Jenkins is remote code
+  # execution by design.
+
+  - id: PANEL_CI_CD_EXPOSED
+    family: panel_exposure
+    bucket: exposure
+    points: 40
+    severity: critical
+    confidence: probable
+    when:
+      all:
+        - {field: panel_group, op: eq, value: ci_cd}
+        - {field: serves_content, op: truthy}
+    title: Build or deployment system reachable from the internet
+    why: >
+      {panel_product} was identified on this endpoint. Build systems run code as
+      their normal function and usually hold deployment credentials, so reaching
+      one is close to reaching production directly.
+    exec_line: A system that can build and deploy code is reachable from the internet.
+    remediation: >
+      Put it behind the VPN or an identity-aware proxy. If it must stay public,
+      require SSO with multi-factor authentication and confirm anonymous read is
+      disabled.
+
+  - id: PANEL_INFRA_CONSOLE_EXPOSED
+    family: panel_exposure
+    bucket: exposure
+    points: 38
+    severity: critical
+    confidence: probable
+    when:
+      all:
+        - {field: panel_group, op: in, value: [infra_console, database_ui]}
+        - {field: serves_content, op: truthy}
+    title: Infrastructure or database console reachable from the internet
+    why: >
+      {panel_product} controls servers, clusters, or data directly. These
+      interfaces are designed for an internal network and often ship with
+      authentication that is weak or optional.
+    exec_line: A console that controls servers or data is reachable from the internet.
+    remediation: >
+      Restrict to an internal network or a bastion. Out-of-band management (iLO,
+      iDRAC, IPMI) should never be internet-facing at all.
+
+  - id: PANEL_NETWORK_DEVICE_EXPOSED
+    family: panel_exposure
+    bucket: exposure
+    points: 26
+    severity: high
+    confidence: probable
+    when:
+      all:
+        - {field: panel_group, op: eq, value: network_device}
+        - {field: serves_content, op: truthy}
+    title: Network or security device interface reachable
+    why: >
+      {panel_product} sits in front of other systems. A management or portal
+      interface on one is a high-value target, and these products have a long
+      history of pre-authentication flaws that are exploited within days of
+      disclosure.
+    exec_line: A firewall, VPN, or load balancer interface is internet-facing.
+    remediation: >
+      Confirm this interface is meant to be public. A VPN portal usually is; a
+      device *management* interface never is. Track its patch level deliberately.
+
+  - id: PANEL_ADMIN_EXPOSED
+    family: panel_exposure
+    bucket: exposure
+    points: 22
+    severity: high
+    confidence: possible
+    when:
+      all:
+        - {field: panel_group, op: eq, value: admin_panel}
+        - {field: serves_content, op: truthy}
+    title: Administrative interface reachable from the internet
+    why: >
+      {panel_product} is an administrative interface. Whether that is acceptable
+      depends on whether it enforces strong authentication, which a scan cannot
+      determine.
+    exec_line: An admin login page is reachable from the internet.
+    remediation: >
+      Require SSO and multi-factor authentication, or restrict by source address.
+
+  - id: PANEL_STORAGE_EXPOSED
+    family: panel_exposure
+    bucket: sensitivity
+    points: 24
+    severity: high
+    confidence: probable
+    when:
+      all:
+        - {field: panel_group, op: eq, value: storage}
+        - {field: serves_content, op: truthy}
+    title: File transfer or object storage interface reachable
+    why: >
+      {panel_product} holds whatever has been transferred or stored through it.
+      Managed file transfer products in particular have been mass-exploited, and
+      the data in them is usually exactly what an attacker wants.
+    exec_line: A file transfer or storage system is reachable from the internet.
+    remediation: >
+      Verify the product is current, authentication is enforced, and anonymous
+      access is off. Review what is actually stored in it.
+
+  - id: PANEL_DEV_TOOL_EXPOSED
+    family: panel_exposure
+    bucket: sensitivity
+    points: 14
+    severity: medium
+    confidence: possible
+    when:
+      all:
+        - {field: panel_group, op: in, value: [dev_tool, monitoring, webmail]}
+        - {field: serves_content, op: truthy}
+    title: Internal tooling reachable from the internet
+    why: >
+      {panel_product} was identified. Source control, issue trackers, and
+      monitoring dashboards leak internal structure, hostnames, and sometimes
+      credentials held in dashboard configuration.
+    exec_line: Internal development or monitoring tooling is reachable externally.
+    remediation: >
+      Confirm public access is intended, and that no dashboard or ticket contains
+      a credential.
+
+  - id: PANEL_IOT_EXPOSED
+    family: panel_exposure
+    bucket: exposure
+    points: 20
+    severity: high
+    confidence: possible
+    when:
+      all:
+        - {field: panel_group, op: eq, value: iot}
+        - {field: serves_content, op: truthy}
+    title: Camera, printer, or building system reachable
+    why: >
+      {panel_product} was identified. Devices like these are rarely in an asset
+      inventory, rarely patched, and often keep their default credentials — while
+      sitting on an internal network segment.
+    exec_line: A camera, printer, or building system is exposed to the internet.
+    remediation: >
+      Remove it from the internet. If remote access is genuinely needed, put it
+      behind the VPN and change the default credentials.
+
+  # ── Information disclosure visible without probing ─────────────────────────
+
+  - id: DISCLOSURE_CRITICAL
+    family: disclosure
+    bucket: sensitivity
+    points: 45
+    severity: critical
+    confidence: confirmed
+    requires_fields: [body_preview]
+    when: {field: disclosure_worst, op: eq, value: critical}
+    title: Credential or key material in the response
+    why: >
+      The response body contains something shaped like a secret. Treat it as
+      already compromised: anything served publicly should be assumed indexed.
+    exec_line: A password or key is being served publicly.
+    remediation: >
+      Rotate the exposed credential first, then remove it from the response.
+      Rotating second leaves a window where the old secret is still valid.
+
+  - id: DISCLOSURE_HIGH
+    family: disclosure
+    bucket: hygiene
+    points: 20
+    severity: high
+    confidence: confirmed
+    when: {field: disclosure_worst, op: eq, value: high}
+    title: Sensitive server information disclosed
+    why: >
+      This endpoint returns configuration or environment detail — module lists,
+      absolute paths, sometimes environment variables — that narrows an attack
+      considerably.
+    exec_line: A page is publishing internal server configuration.
+    remediation: Remove or restrict the page. It is diagnostic output, not a feature.
+
+  - id: DISCLOSURE_MEDIUM
+    family: disclosure
+    bucket: hygiene
+    points: 12
+    severity: medium
+    confidence: confirmed
+    when: {field: disclosure_worst, op: eq, value: medium}
+    title: Directory listing or error output exposed
+    why: >
+      Directory listings enumerate whatever was left in the folder, and stack
+      traces name internal paths and library versions. Neither should be public.
+    exec_line: A page is exposing file listings or error detail.
+    remediation: >
+      Disable directory indexing, and switch the application to a generic error
+      page in production.
+
+  - id: STORAGE_BUCKET_EXPOSED
+    family: disclosure
+    bucket: sensitivity
+    points: 30
+    severity: high
+    confidence: probable
+    requires_fields: [body_preview]
+    when: {field: disclosure_ids, op: contains_any,
+           value: [STORAGE_S3_LISTABLE, STORAGE_AZURE_BLOB_LISTABLE,
+                   STORAGE_GCS_LISTABLE]}
+    title: Cloud storage bucket lists its contents publicly
+    why: >
+      The bucket enumerates its objects to anonymous callers, so every file name
+      in it is public — and often the files are too.
+    exec_line: A cloud storage bucket is publicly browsable.
+    remediation: >
+      Block public access at the bucket level, then review access logs for what
+      has already been read.
+
+  # ── Unmanaged and unfinished deployments ───────────────────────────────────
+
+  - id: DEFAULT_PAGE_SERVED
+    family: hygiene
+    bucket: hygiene
+    points: 16
+    severity: medium
+    confidence: confirmed
+    when:
+      all:
+        - {field: is_default_page, op: truthy}
+        - {field: serves_content, op: truthy}
+    title: Default installation page still served
+    why: >
+      {default_page_product} is answering with its out-of-the-box page. Nobody
+      finished configuring this host, which usually also means nobody is patching
+      it — and it advertises the exact software stack.
+    exec_line: A server is still showing its default "it works" page.
+    remediation: >
+      Decide whether the host is needed. If it is, deploy the real application;
+      if not, take it off the internet.

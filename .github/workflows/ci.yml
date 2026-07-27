@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12', '3.13']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install
+        run: pip install -e '.[dev]'
+
+      - name: Lint
+        run: ruff check frogscope tests
+
+      - name: Tests
+        run: pytest
+
+      # The configuration IS the product: rules, fingerprints, and column
+      # definitions are data, and a malformed one breaks the app at runtime rather
+      # than at import. Validate it in CI.
+      - name: Validate configuration
+        run: |
+          python -m frogscope doctor
+          python -m frogscope rules validate
+          python -m frogscope catalogue validate
+
+      # End-to-end on the committed sample, so a change that breaks ingest cannot
+      # pass on unit tests alone.
+      - name: Ingest the sample scan
+        run: |
+          python -m frogscope init
+          python -m frogscope ingest examples/demo-scan.csv \
+            --project demo --project-name Demo --label ci
+          python -m frogscope report
+          python -m frogscope rules coverage
+
+      - name: Offline export must reference nothing external
+        run: |
+          python -m frogscope export-html --out /tmp/demo.html
+          python - <<'PY'
+          import re, pathlib, sys
+          html = pathlib.Path('/tmp/demo.html').read_text()
+          # A single CDN or font request would break the whole point of the export.
+          for pattern in (r'src="https?://', r'href="https?://',
+                          r'@import\s+url\(https?://'):
+              if re.search(pattern, html):
+                  sys.exit(f'offline export references an external resource: {pattern}')
+          print(f'offline export is self-contained ({len(html) // 1024} KB)')
+          PY
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Scan data is gitignored, but a mistake there would publish somebody's
+      # asset inventory. Cheap to check on every push.
+      - name: No scan data committed
+        run: |
+          if git ls-files | grep -vE '^tests/fixtures/|^examples/' | grep -E '\.csv$|\.sqlite$'; then
+            echo "::error::scan data or a database is tracked in git"
+            exit 1
+          fi
+          echo "no scan data tracked"

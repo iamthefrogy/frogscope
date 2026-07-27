@@ -1,0 +1,127 @@
+# Detection catalogue provenance.
+#
+# WHY THIS FILE EXISTS
+# In six months somebody will ask "are our checks still current?". Without a
+# record of what was reviewed, when, and what was deliberately skipped, the only
+# honest answer is "no idea" — and the review starts from scratch every time.
+#
+# This file is that record. `frogscope catalogue status` reads it and says how
+# stale each source is. README.md (Maintenance) holds the procedure.
+#
+# NOTHING HERE IS A DEPENDENCY. We do not download, bundle, execute, or require
+# nuclei or its templates. Upstream is read once by a human (or by Claude) during
+# a review, and what survives the review is rewritten as our own predicate logic
+# against fields a scan already returned. The catalogue is inspiration and a
+# checklist, never a runtime input.
+
+version: 1
+
+# Bump when a review changes detections, so a score change can be attributed to a
+# catalogue update rather than to the estate actually changing.
+catalogue_version: 3
+
+# How often a review is worth doing. Upstream adds templates continuously, but
+# the ASM-relevant subset moves slowly — new takeover providers and new appliance
+# families, mostly.
+review_interval_days: 180
+
+sources:
+  - id: nuclei-templates
+    name: ProjectDiscovery nuclei-templates
+    url: https://github.com/projectdiscovery/nuclei-templates
+    licence: MIT
+    last_reviewed: 2026-07-25
+    # Counts observed at review time. A large jump on the next review is the
+    # signal to look harder at that directory.
+    observed:
+      total_http: 11038
+      ssl: 38
+      dns: 31
+      takeovers: 72
+      network: 280
+      cloud: 663
+    # What we took, and what it became on our side.
+    adopted:
+      - upstream: http/takeovers
+        ours: config/takeover.yaml
+        note: >
+          All 72 provider templates reviewed. Each became a CNAME suffix plus the
+          body string the provider serves for an unclaimed resource. Grading is
+          ours: `claimable` decides whether an outsider could actually take the
+          name, which upstream does not model.
+      - upstream: http/exposed-panels
+        ours: config/fingerprints.yaml (panels)
+        note: >
+          Upstream requests a specific path per product. We cannot, so only
+          products identifiable from a ROOT response are covered — title,
+          technology, CPE, favicon, or body. That is a real coverage gap and
+          `catalogue coverage` reports it rather than implying completeness.
+      - upstream: http/misconfiguration
+        ours: config/fingerprints.yaml (default_pages, disclosure)
+        note: >
+          Only the subset visible without a path request: default install pages,
+          directory listings, stack traces, phpinfo, status pages.
+      - upstream: ssl
+        ours: config/rules.yaml (certificate family)
+        note: >
+          All 13 reviewed. Expired, self-signed, hostname mismatch, deprecated
+          protocol version, and weak cipher are all derivable from `httpx
+          -tls-grab`. Revocation and untrusted-root need a live chain check, so
+          they are out of scope.
+      - upstream: dns
+        ours: config/rules.yaml (takeover family), classify.yaml
+        note: >
+          Dangling CNAME and SaaS detection adopted. SPF, DMARC, DKIM, DNSSEC,
+          CAA, and MX checks need a resolver and httpx does not return those
+          records — listed under `blocked_by_input` below.
+      - upstream: http/technologies
+        ours: httpx -tech-detect (upstream of us)
+        note: >
+          Not reimplemented. httpx already does technology detection, and
+          duplicating it would create two disagreeing answers.
+
+    # Deliberately NOT adopted, with the reason. This list is as important as the
+    # adopted one: without it, every review re-litigates the same decisions.
+    excluded:
+      - upstream: http/cves, http/vulnerabilities
+        reason: >
+          These confirm a flaw by exploiting it. We are an attack-surface tool and
+          send no packets during ingest. Where a version is visible we infer
+          exposure (`SUSPECTED_VULN_FAMILY`) and label it `possible` — a
+          fingerprint is not proof.
+      - upstream: http/exposures, http/fuzzing, dast
+        reason: >
+          Every one requires requesting a path we were not given (/.git/config,
+          /.env, /backup.zip). Passive data cannot reach them. This is the single
+          largest coverage gap and it is stated plainly rather than hidden.
+      - upstream: http/default-logins
+        reason: >
+          Submitting credentials is an authentication attempt. We report that a
+          login panel is reachable and leave the credential test to a human with
+          authorisation.
+      - upstream: code, javascript, headless, file
+        reason: Needs source, a browser, or a local filesystem. Not applicable.
+      - upstream: network (service banners)
+        reason: >
+          Needs raw socket probing. httpx only reports HTTP(S). Non-standard ports
+          serving HTTP are covered by our port rules.
+
+# Checks that are written, correct, and cannot fire on the data available. Kept
+# visible so "no findings" is never mistaken for "nothing there".
+blocked_by_input:
+  - fields: [body_preview]
+    unlocks_with: httpx -body-preview
+    covers: >
+      Credential strings in responses, listable cloud buckets, provider takeover
+      fingerprints, and unauthenticated management consoles.
+  - fields: [tls_version, cert_not_after, cert_issuer]
+    unlocks_with: httpx -tls-grab
+    covers: Certificate expiry, self-signed and mismatched certificates, legacy TLS.
+  - fields: [favicon_md5]
+    unlocks_with: httpx -favicon
+    covers: >
+      Product identification where the title is generic or empty — often the only
+      way to name a panel behind a login screen.
+  - fields: [spf, dmarc, dnssec, caa, mx]
+    unlocks_with: a DNS collection step (not currently part of the pipeline)
+    covers: Email spoofing protection and DNS hygiene.

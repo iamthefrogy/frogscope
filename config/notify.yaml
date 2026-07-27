@@ -1,0 +1,73 @@
+# Notification routing.
+#
+# Deliberately NOT part of the config hash stamped on each run. Where an alert
+# gets posted has no effect on any derived value, so changing it must not make
+# every stored run look as though its scoring inputs moved — that warning is
+# reserved for edits that genuinely change the numbers.
+#
+# URLs support ${ENV_VAR} expansion, and you should use it: this file is
+# committed to git, and a Slack incoming-webhook URL is a credential. A target
+# whose variable is unset is skipped with a message, never silently dropped.
+
+enabled: false            # `notify` also needs --send; this is the second lock
+
+# What is worth waking someone for. Everything else stays in the dashboard.
+triggers:
+  # Findings appearing for the FIRST time in this run. Not "all open critical
+  # findings" — those were already reported when they appeared, and re-sending
+  # them every week is how a channel gets muted.
+  new_findings:
+    enabled: true
+    min_severity: high        # critical | high | medium | low
+    max_listed: 15            # beyond this, the alert says "and N more"
+
+  # Protection removed, or a host that was fine now serving content. A change
+  # in the wrong direction matters even when no new finding fired.
+  worsened:
+    enabled: true
+    min_score_delta: 15
+    max_listed: 10
+
+  # A dangling-record candidate is time-sensitive in a way most findings are
+  # not: whoever claims the name first wins.
+  takeover:
+    enabled: true
+    min_grade: medium          # high | medium
+    max_listed: 20
+
+  # Posture index dropping is the executive-facing signal.
+  posture_drop:
+    enabled: true
+    min_points: 3
+
+  # An empty run, a truncated scan, or a schema change. Quiet failures are
+  # worse than loud ones: a scan that silently halved would otherwise read as
+  # an improvement.
+  data_quality:
+    enabled: true
+
+targets:
+  - name: slack
+    kind: slack
+    url: ${FROGSCOPE_SLACK_WEBHOOK}
+    enabled: false
+    redact: false            # true when the channel is outside the security team
+
+  - name: generic
+    kind: webhook            # POST the whole alert as JSON
+    url: ${FROGSCOPE_WEBHOOK_URL}
+    enabled: false
+    redact: false
+
+  # Sends nothing anywhere. Appends one JSON object per alert to a local file,
+  # which is how you test routing and see the exact payload without a webhook.
+  - name: local
+    kind: file
+    path: data/notifications.jsonl
+    enabled: true
+    redact: false
+
+delivery:
+  timeout: 10
+  retries: 2
+  retry_delay: 2

@@ -1,0 +1,129 @@
+# Software lifecycle data.
+#
+# Everything here is a claim about a *product*, not about a host. httpx
+# fingerprints banners and CPE strings, so a match means "this is probably
+# running", never "this is confirmed vulnerable". That distinction is carried
+# through to the UI as a confidence level rather than being quietly dropped.
+
+# ── End of life ─────────────────────────────────────────────────────────────
+# Matched against `cpe_products` (vendor:product) or a webserver regex.
+eol:
+  - product: microsoft:windows_server_2003
+    name: Windows Server 2003
+    eol_date: "2015-07-14"
+    severity: critical
+    note: >
+      Unsupported since 2015. No security patches are issued, and no
+      configuration change makes it supportable again.
+
+  - product: microsoft:windows_server_2008
+    name: Windows Server 2008 / 2008 R2
+    eol_date: "2020-01-14"
+    severity: critical
+
+  - product: microsoft:windows_server_2012
+    name: Windows Server 2012 / 2012 R2
+    eol_date: "2023-10-10"
+    severity: high
+
+  - product: cisco:adaptive-security-appliance-software
+    name: Cisco ASA
+    eol_date: null
+    severity: high
+    note: >
+      Version not exposed by an unauthenticated probe, so the specific release
+      cannot be confirmed. Cisco ASA has a long history of pre-authentication
+      vulnerabilities in the web VPN interface, and it should not be reachable
+      from the internet without a compensating control.
+
+  - product: citrix:gateway
+    name: Citrix Gateway
+    eol_date: null
+    severity: high
+    note: >
+      Repeatedly targeted by pre-authentication exploits (CVE-2019-19781,
+      CVE-2023-3519, CVE-2023-4966). Confirm the build is current.
+
+  - product: citrix:netscaler_application_delivery_controller
+    name: Citrix NetScaler ADC
+    eol_date: null
+    severity: high
+
+  - match_regex: 'Microsoft-IIS/[1-6]\.'
+    name: IIS 6 or older
+    eol_date: "2015-07-14"
+    severity: critical
+
+  - match_regex: 'Apache/2\.[0-2]\.'
+    name: Apache 2.2 or older
+    eol_date: "2018-01-01"
+    severity: high
+
+  - match_regex: 'nginx/1\.(?:[0-9]|1[0-7])\.'
+    name: nginx 1.17 or older
+    eol_date: "2019-12-01"
+    severity: medium
+
+  - match_regex: 'PHP/[45]\.'
+    name: PHP 5 or older
+    eol_date: "2019-01-01"
+    severity: critical
+
+# ── Minimum safe versions ───────────────────────────────────────────────────
+# Compared against the versions parsed out of the `tech` array
+# (for example "Yoast SEO:28.1" -> {"Yoast SEO": "28.1"}).
+min_versions:
+  jQuery: "3.7.1"
+  jQuery Migrate: "3.4.1"
+  Yoast SEO: "24.0"
+  Download Monitor: "5.0.0"
+  OptinMonster plugin: "2.16.0"
+  Bootstrap: "5.0.0"
+  Lodash: "4.17.21"
+  Express: "4.19.0"
+  Apache HTTP Server: "2.4.58"
+  Nginx: "1.24.0"
+
+# ── Known-vulnerable product families ───────────────────────────────────────
+# Confidence is deliberately `possible`: the presence of a product is not proof
+# of an exploitable instance. These exist to prioritise a look, not to claim a
+# vulnerability.
+cve_families:
+  - product: vmware:workspace_one_uem
+    family: VMware Workspace ONE UEM
+    note: CVE-2022-22954 and related pre-auth SSRF and RCE chains.
+    severity: high
+
+  - product: n8n:n8n
+    family: n8n workflow automation
+    note: >
+      Self-hosted automation platform. Commonly deployed with default or absent
+      authentication, and it holds credentials for whatever it automates.
+    severity: high
+
+  - product: agentejo:cockpit
+    family: Cockpit CMS
+    note: CVE-2023-01 NoSQL injection leading to account takeover.
+    severity: high
+
+  - product: saltbo:zpan
+    family: ZPan file sharing
+    note: Self-hosted file sharing; unauthenticated file access issues reported.
+    severity: medium
+
+  - product: microsoft:remote_desktop
+    family: Remote Desktop Web
+    note: >
+      RD Web exposed to the internet is a credential-stuffing and
+      BlueKeep-class target.
+    severity: high
+
+  - product: webp:webp_server_go
+    family: WebP Server Go
+    note: Image proxy; path traversal issues reported in older builds.
+    severity: medium
+
+  - product: microsoft:azure_app_service_on_azure_stack
+    family: Azure App Service
+    note: Managed platform — informational only.
+    severity: info

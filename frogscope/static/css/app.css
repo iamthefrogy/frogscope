@@ -1,0 +1,429 @@
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; }
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--color-primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code, .mono { font-family: var(--font-mono); font-size: 12px; }
+
+.muted    { color: var(--color-text-muted); }
+.subtle   { color: var(--color-text-subtle); }
+.nowrap   { white-space: nowrap; }
+.right    { text-align: right; }
+.num      { font-variant-numeric: tabular-nums; }
+
+/* ── Shell ────────────────────────────────────────────────────────────────── */
+
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+.topbar {
+  display: flex; align-items: center; gap: 16px;
+  height: var(--topbar-height); flex: 0 0 var(--topbar-height);
+  padding: 0 16px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+.brand { flex: 0 0 auto; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
+.brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-primary); flex: 0 0 auto; }
+.brand-text { display: flex; flex-direction: column; line-height: 1.25; white-space: nowrap; }
+.brand-title { font-size: 19px; font-weight: 700; }
+.brand-sub { color: var(--color-text-subtle); font-weight: 400; font-size: 10.5px; }
+
+.tabs {
+  display: flex; gap: 2px; margin-left: 8px;
+  /* Fourteen tabs overflow a laptop viewport. Scrolling the nav keeps the run
+     picker and theme toggle reachable instead of wrapping them off screen. */
+  overflow-x: auto; scrollbar-width: none; min-width: 0;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  padding: 6px 10px; border-radius: var(--radius-sm); cursor: pointer;
+  color: var(--color-text-muted); border: 1px solid transparent;
+  background: none; font: inherit;
+  /* Without this a two-word label wraps and the whole bar grows a second line. */
+  white-space: nowrap; flex: 0 0 auto;
+}
+.tab:hover { color: var(--color-text); background: var(--color-surface-muted); }
+.tab[aria-current="page"] {
+  color: var(--color-text); background: var(--color-primary-dim);
+  border-color: var(--color-primary);
+}
+
+.spacer { flex: 1; }
+
+.main { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.view { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.view-scroll { flex: 1; overflow: auto; padding: 16px; }
+
+/* ── Controls ─────────────────────────────────────────────────────────────── */
+
+button, select, input, textarea { font: inherit; color: inherit; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 11px; border-radius: var(--radius-sm); cursor: pointer;
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  color: var(--color-text); white-space: nowrap;
+}
+.btn:hover { border-color: var(--color-border-subtle); background: var(--color-surface-raised); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-primary { background: var(--color-primary-dim); border-color: var(--color-primary);
+               color: var(--color-text); }
+.btn-sm { padding: 3px 8px; font-size: 12px; }
+/* Irreversible actions. Outlined rather than filled, so a destructive button is
+ * never the most eye-catching thing on the page and cannot be hit by reflex. */
+.btn-danger { border-color: var(--color-danger); color: var(--color-danger); }
+.btn-danger:hover { background: rgba(239, 68, 68, 0.12);
+                    border-color: var(--color-danger); }
+
+/* Deleting things lives in its own visually separated block, below everything
+ * else, so nobody arrives at it by accident. */
+.danger-zone { border-color: var(--color-danger); }
+.danger-zone > h3 { color: var(--color-danger); }
+.danger-row { display: flex; gap: 12px; align-items: flex-start;
+              padding: 12px 0; border-top: 1px solid var(--color-border); }
+.danger-row:first-of-type { border-top: 0; }
+.danger-row > div { flex: 1; min-width: 0; }
+
+/* First-run setup. Full width like every other section — it was a narrow centred
+ * column, which left the two options cramped side by side. */
+.setup-head { margin-bottom: 16px; }
+.setup-head h1 { font-size: 22px; margin: 0 0 4px; }
+.setup-head p { margin: 0; max-width: 70ch; }
+
+.setup-step2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.07em;
+               color: var(--color-text-muted); font-weight: 600;
+               margin: 0 0 10px; }
+
+/* Two equal columns, stacking on a narrow viewport rather than squeezing. */
+.setup-options {
+  display: grid; gap: 16px; align-items: start;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+}
+.setup-option { display: flex; flex-direction: column; }
+.setup-option-head { display: flex; align-items: center; gap: 8px;
+                     margin-bottom: 8px; }
+.setup-option-tag {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+  padding: 2px 7px; border-radius: 999px; font-weight: 700;
+  background: var(--color-primary-dim); border: 1px solid var(--color-primary);
+  color: var(--color-text); white-space: nowrap;
+}
+
+/* The step-by-step guide in Option 1. */
+.setup-guide { margin: 0 0 14px; padding-left: 18px; }
+.setup-guide > li { margin-bottom: 10px; }
+.setup-guide > li:last-child { margin-bottom: 0; }
+.setup-guide-step { font-weight: 600; margin-bottom: 4px; }
+.setup-cmd {
+  margin: 4px 0; padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--color-bg); border: 1px solid var(--color-border);
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.5;
+  /* Long commands scroll inside the box rather than widening the page. */
+  overflow-x: auto; white-space: pre;
+}
+
+.input, select.input {
+  padding: 5px 9px; border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  color: var(--color-text); min-width: 0;
+}
+.input:focus, select.input:focus {
+  outline: none; border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-dim);
+}
+.omnibox { flex: 1; max-width: 520px; font-family: var(--font-mono); font-size: 12px; }
+
+/* ── Layout helpers ───────────────────────────────────────────────────────── */
+
+.toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 16px; background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.card {
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  border-radius: var(--radius-md); padding: 14px 16px;
+}
+.card h3 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase;
+           letter-spacing: 0.07em; color: var(--color-text-muted); font-weight: 600; }
+
+/* v2: the app-wide access-key screen, shown instead of the whole app shell
+   until a valid key is stored. */
+.auth-gate {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: var(--color-bg); padding: 24px;
+}
+.auth-gate-card { width: 100%; max-width: 380px; }
+
+.grid-cards {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+}
+
+.kpi { display: flex; flex-direction: column; gap: 4px; }
+.kpi-value { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums;
+             letter-spacing: -0.02em; }
+.kpi-label { font-size: 12px; color: var(--color-text-muted); }
+.kpi-note  { font-size: 11px; color: var(--color-text-subtle); }
+/* Both the trend delta and the sparkline fall back to a short note when there is
+ * only one run. Inline, the two ran together as "no prior scanneeds 2+ runs", so
+ * they stack instead. */
+.stat-empty { display: block; font-size: 11px; color: var(--color-text-muted); }
+
+/* ── Chips ────────────────────────────────────────────────────────────────── */
+
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 7px; border-radius: 999px; font-size: 11px;
+  background: var(--color-surface-muted); border: 1px solid var(--color-border);
+  white-space: nowrap; max-width: 100%;
+}
+.chip-list { display: flex; flex-wrap: wrap; gap: 3px; }
+.chip.removable { cursor: pointer; }
+.chip.removable:hover { border-color: var(--color-danger); }
+
+/* Severity and state chips always carry a glyph plus text — colour alone must
+ * never be the only signal. */
+.chip[data-state="bad"]     { color: var(--status-critical); border-color: var(--status-critical); }
+.chip[data-state="warn"]    { color: var(--status-medium);   border-color: var(--status-medium); }
+.chip[data-state="good"]    { color: var(--status-good);     border-color: var(--status-good); }
+.chip[data-state="neutral"] { color: var(--color-text-muted); }
+.chip[data-state="info"]    { color: var(--color-info);      border-color: var(--color-info); }
+
+/* ── Data grid ────────────────────────────────────────────────────────────── */
+
+.grid-wrap { flex: 1; overflow: auto; position: relative; }
+
+table.grid { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; }
+
+table.grid th, table.grid td {
+  padding: 0 10px; height: var(--row-height);
+  border-bottom: 1px solid var(--color-border);
+  text-align: left; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; max-width: 460px;
+}
+
+table.grid thead th {
+  position: sticky; top: 0; z-index: 3;
+  background: var(--color-surface-muted);
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--color-text-muted);
+  cursor: pointer; user-select: none;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+table.grid thead th:hover { color: var(--color-text); }
+table.grid thead tr.filters th {
+  top: var(--row-height); z-index: 2; padding: 3px 6px; height: auto;
+  background: var(--color-surface); text-transform: none; letter-spacing: 0;
+  cursor: default;
+}
+table.grid thead tr.filters input,
+table.grid thead tr.filters select {
+  width: 100%; padding: 2px 5px; font-size: 11px;
+  background: var(--color-bg); border: 1px solid var(--color-border);
+  border-radius: 6px; color: var(--color-text);
+}
+table.grid thead tr.filters .active { border-color: var(--color-primary); }
+
+table.grid tbody tr:hover { background: var(--color-surface-muted); }
+table.grid tbody tr[aria-selected="true"] { background: var(--color-primary-dim); }
+table.grid td.cell-num { text-align: right; font-variant-numeric: tabular-nums; }
+table.grid td.cell-mono { font-family: var(--font-mono); font-size: 12px; }
+
+.sort-arrow { color: var(--color-primary); margin-left: 3px; }
+
+/* ── Facets ───────────────────────────────────────────────────────────────── */
+
+.facets {
+  width: 260px; flex: 0 0 260px; overflow: auto;
+  background: var(--color-surface); border-right: 1px solid var(--color-border);
+  padding: 12px;
+}
+.facet { margin-bottom: 14px; }
+.facet-title {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--color-text-muted); font-weight: 600; margin-bottom: 5px;
+  cursor: pointer;
+}
+.facet-row {
+  display: flex; align-items: center; gap: 6px; padding: 2px 3px;
+  border-radius: 6px; cursor: pointer; font-size: 12px;
+}
+.facet-row:hover { background: var(--color-surface-muted); }
+/* Immediate feedback on click, independent of the round trip to the server. */
+.facet-row[data-on] { background: var(--color-primary-dim); }
+.facet-row[data-on] .label { color: var(--color-text); }
+.facet-row input { margin: 0; accent-color: var(--color-primary);
+                   flex: 0 0 auto; }
+.facet-row .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Tabular figures and a reserved width, so a count going from 9 to 1,204 does not
+ * re-lay-out the row. */
+.facet-row .count { color: var(--color-text-subtle); font-variant-numeric: tabular-nums;
+                    font-size: 11px; flex: 0 0 auto; min-width: 34px;
+                    text-align: right; }
+
+/* ── Drawer ───────────────────────────────────────────────────────────────── */
+
+.drawer-backdrop {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 40;
+}
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 41;
+  width: min(760px, 100vw);
+  background: var(--color-surface); border-left: 1px solid var(--color-border);
+  box-shadow: var(--shadow-soft);
+  display: flex; flex-direction: column;
+}
+.drawer-head {
+  display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+.drawer-title { font-family: var(--font-mono); font-size: 13px; font-weight: 600;
+                overflow: hidden; text-overflow: ellipsis; }
+.drawer-tabs { display: flex; gap: 2px; padding: 8px 12px 0;
+               border-bottom: 1px solid var(--color-border); }
+.drawer-body { flex: 1; overflow: auto; padding: 14px 16px; }
+
+.kv { display: grid; grid-template-columns: minmax(140px, 200px) 1fr; gap: 3px 14px; }
+.kv dt { color: var(--color-text-muted); font-size: 12px; }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+
+/* ── Misc ─────────────────────────────────────────────────────────────────── */
+
+.empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; padding: 60px 20px; text-align: center; color: var(--color-text-muted);
+}
+.empty h2 { margin: 0; font-size: 16px; color: var(--color-text); }
+
+.dropzone {
+  border: 2px dashed var(--color-border-subtle); border-radius: var(--radius-md);
+  padding: 34px; text-align: center; color: var(--color-text-muted);
+  transition: border-color 0.12s, background 0.12s;
+}
+.dropzone.over { border-color: var(--color-primary); background: var(--color-primary-dim);
+                 color: var(--color-text); }
+
+.bar { height: 8px; border-radius: 999px; background: var(--color-surface-muted);
+       overflow: hidden; display: flex; }
+/* A 2px surface-coloured gap separates adjacent segments, so touching fills
+ * stay legible without relying on colour contrast between them. */
+.bar > span { height: 100%; border-right: 2px solid var(--color-surface); }
+.bar > span:last-child { border-right: 0; }
+
+.banner {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
+  border-radius: var(--radius-sm); border: 1px solid var(--color-warning);
+  background: rgba(245, 158, 11, 0.10); margin-bottom: 12px; font-size: 12px;
+}
+.banner.error { border-color: var(--color-danger); background: rgba(239, 68, 68, 0.10); }
+.banner.info  { border-color: var(--color-info);   background: rgba(59, 130, 246, 0.10); }
+
+.loading { padding: 40px; text-align: center; color: var(--color-text-muted); }
+
+.pager { display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+         border-top: 1px solid var(--color-border); background: var(--color-surface); }
+
+.fill-bar { height: 6px; border-radius: 999px; background: var(--color-surface-muted);
+            overflow: hidden; min-width: 80px; }
+.fill-bar > span { display: block; height: 100%; background: var(--series-1); }
+
+table.plain { border-collapse: collapse; width: 100%; }
+table.plain th, table.plain td {
+  text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--color-border);
+}
+table.plain th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+                 color: var(--color-text-muted); font-weight: 600; }
+
+.scroll-x { overflow-x: auto; }
+
+@media (max-width: 900px) {
+  .facets { display: none; }
+  .topbar { flex-wrap: wrap; height: auto; padding: 8px; }
+}
+
+/* ── Help ─────────────────────────────────────────────────────────────────── */
+/* A question mark beside a heading, fading a plain-English explanation in.
+ * Recessive until hovered: help that competes with the data is a distraction. */
+
+.help-holder { position: relative; display: inline-flex; align-items: center; }
+
+.help-dot {
+  width: 15px; height: 15px; flex: 0 0 15px; margin-left: 6px; padding: 0;
+  border-radius: 50%; cursor: pointer; font-size: 10px; line-height: 1;
+  font-weight: 700; font-family: var(--font-sans);
+  display: inline-grid; place-items: center;
+  background: transparent; color: var(--color-text-subtle);
+  border: 1px solid var(--color-border);
+}
+.help-dot:hover, .help-dot[aria-expanded="true"] {
+  color: var(--color-primary); border-color: var(--color-primary);
+  background: var(--color-primary-dim);
+}
+.help-dot:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+
+.help-panel {
+  position: absolute; top: calc(100% + 8px); z-index: 60;
+  width: min(380px, calc(100vw - 32px));
+  padding: 12px 14px; border-radius: var(--radius-md);
+  background: var(--color-surface-raised, var(--color-surface));
+  border: 1px solid var(--color-border-subtle, var(--color-border));
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  font-size: 12px; line-height: 1.55; color: var(--color-text-muted);
+  text-transform: none; letter-spacing: normal; font-weight: 400;
+  /* Fade AND a small rise: a panel that only fades reads as a rendering glitch. */
+  opacity: 0; transform: translateY(-4px);
+  transition: opacity 180ms ease, transform 180ms ease, visibility 180ms;
+  visibility: hidden; pointer-events: none;
+}
+.help-panel.open { opacity: 1; transform: translateY(0);
+                   visibility: visible; pointer-events: auto; }
+.help-panel.left  { left: 0; }
+.help-panel.right { right: 0; }
+.help-panel strong { display: block; margin-bottom: 6px; font-size: 12px;
+                     color: var(--color-text); }
+.help-panel p { margin: 0 0 8px; }
+.help-panel p:last-child { margin-bottom: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .help-panel { transition: opacity 1ms linear, visibility 1ms; transform: none; }
+}
+
+/* Help is guidance, never part of the deliverable. */
+@media print { .help-holder { display: none !important; } }
+
+.card-title {
+  display: flex; align-items: center; gap: 0;
+  margin: 0 0 10px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.07em; color: var(--color-text-muted); font-weight: 600;
+}
+
+/* ── Two-level navigation ─────────────────────────────────────────────────── */
+/* Fourteen equal tabs asked the reader to understand the whole tool before
+ * clicking anything. Five plain-language sections, each revealing its own
+ * sub-tabs, means one decision at a time. */
+
+.subnav {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  padding: 8px 16px; background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+.subnav .tab { font-size: 12px; padding: 4px 9px; }
+.subnav-label { font-size: 11px; color: var(--color-text-subtle);
+                text-transform: uppercase; letter-spacing: 0.07em;
+                margin-right: 4px; }

@@ -1,0 +1,854 @@
+# Subdomain-takeover fingerprints.
+#
+# Graded, never asserted. A dangling CNAME is a *candidate* until someone
+# verifies it, and no network request is made during ingest — so nothing here can
+# be promoted to "confirmed" without the opt-in `verify --takeover` step.
+#
+# The grading matters because two very different conditions look similar:
+#
+#   Cloudflare 530 (error 1016) = the origin DNS record does not resolve.
+#     The hostname points at nothing. That is a takeover signal.
+#   Cloudflare 525/526          = the origin resolves and answers, but its TLS
+#     is broken. That is an availability bug, NOT a takeover.
+#
+# Conflating them generates false takeover alerts, which is how a findings feed
+# loses credibility.
+#
+# `source:` records where an entry came from, so a later refresh can tell which
+# entries are ours and which mirror an upstream catalogue. See
+# README.md (Maintenance) for the review procedure.
+#
+# `body_fingerprints` only fire when the scan collected response bodies
+# (httpx -body-preview). Without that data an entry degrades to CNAME-suffix
+# matching, which is why a claimable provider with no body match grades `medium`
+# rather than `high`.
+
+grades:
+  high:
+    label: Likely dangling
+    confidence: probable
+    description: 'A provider-specific "this resource does not exist" fingerprint, or an edge reporting
+      that the origin DNS record is missing.
+
+      '
+  medium:
+    label: Possible dangling
+    confidence: possible
+    description: 'The hostname delegates to a provider where unclaimed names can be registered by anyone,
+      and it is not currently serving.
+
+      '
+  low:
+    label: Worth checking
+    confidence: possible
+    description: 'Delegated to a third-party provider and returning an error, but the provider does not
+      allow arbitrary name claiming.
+
+      '
+dangling_origin_health:
+- dns_missing
+providers:
+- provider: Aftership
+  cname_suffixes:
+  - aftership.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Oops.</h2><p class="text">The page you're looking for doesn't exist.
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Agile CRM
+  cname_suffixes:
+  - agilecrm.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Sorry, this page is no longer available
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: AgileCRM
+  cname_suffixes:
+  - agilecrm.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Sorry, this page is no longer available.
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Aha!
+  cname_suffixes:
+  - ideas.aha.io
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - There is no portal here ... sending you back to Aha!
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Airee
+  cname_suffixes:
+  - cdn.airee.ru
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Ошибка 402. Сервис Айри.рф не оплачен
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Amazon CloudFront
+  cname_suffixes:
+  - cloudfront.net
+  body_fingerprints:
+  - The request could not be satisfied
+  status_hints:
+  - 403
+  claimable: false
+  grade: low
+- provider: Amazon S3
+  cname_suffixes:
+  - s3.amazonaws.com
+  - s3-website.amazonaws.com
+  title_fingerprints:
+  - NoSuchBucket
+  body_fingerprints:
+  - The specified bucket does not exist
+  status_hints:
+  - 404
+  claimable: true
+  grade: high
+  verify: curl -s https://{host}/ | grep -i nosuchbucket
+- provider: Anima
+  cname_suffixes:
+  - animaapp.io
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - If this is your website and you've just created it, try refreshing in a minute
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: AnnounceKit
+  cname_suffixes:
+  - announcekit.app
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Error 404 - AnnounceKit
+  - Ooops, We couldn't find that page
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Azure App Service
+  cname_suffixes:
+  - azurewebsites.net
+  title_fingerprints:
+  - Web App - Unavailable
+  - Microsoft Azure Web App - Error 404
+  status_hints:
+  - 404
+  claimable: true
+  grade: high
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Azure Cloud Service
+  cname_suffixes:
+  - cloudapp.azure.com
+  - cloudapp.net
+  status_hints:
+  - 404
+  claimable: true
+  grade: medium
+- provider: Azure Traffic Manager
+  cname_suffixes:
+  - trafficmanager.net
+  status_hints:
+  - 404
+  claimable: true
+  grade: medium
+  verify: 'dig +short {cname}  # NXDOMAIN means the profile is gone'
+- provider: Bigcartel
+  cname_suffixes:
+  - bigcartel.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - <h1>Oops! We couldn&#8217;t find that page.</h1>
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Bitbucket
+  cname_suffixes:
+  - bitbucket.io
+  claimable: true
+  grade: high
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Repository not found
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Campaign Monitor
+  cname_suffixes:
+  - createsend.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Trying to access your account?
+  - Double check the URL
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Canny
+  cname_suffixes:
+  - canny.io
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Company Not Found
+  - There is no such company. Did you enter the right URL?
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Cargo Collective
+  cname_suffixes:
+  - cargocollective.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - <title>404 &mdash; File not found</title>
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Clever
+  cname_suffixes:
+  - clever.com
+  claimable: false
+  grade: low
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - The page you're looking for doesn't exist
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Elastic Beanstalk
+  cname_suffixes:
+  - elasticbeanstalk.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - NXDOMAIN
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Fastly
+  cname_suffixes:
+  - fastly.net
+  body_fingerprints:
+  - 'Fastly error: unknown domain'
+  status_hints:
+  - 404
+  claimable: false
+  grade: low
+- provider: Flexbe
+  cname_suffixes:
+  - flexbe.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Site is not found
+  - Домен не найден
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Framer
+  cname_suffixes:
+  - framer.app
+  - framer.website
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Page not found
+  - The page you were looking for could not be found
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Frontify
+  cname_suffixes:
+  - frontify.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - 404 - Page Not Found
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Gemfury
+  cname_suffixes:
+  - furyns.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - '404: This page could not be found.'
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: GetResponse
+  cname_suffixes:
+  - gr8.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - With GetResponse Landing Pages, lead generation has never been easier
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Ghost
+  cname_suffixes:
+  - ghost.io
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - The thing you were looking for is no longer here, or never was
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: GitBook
+  cname_suffixes:
+  - gitbook.io
+  - gitbook.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - If you need specifics, here's the error
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: GitHub Pages
+  cname_suffixes:
+  - github.io
+  title_fingerprints:
+  - Site not found · GitHub Pages
+  body_fingerprints:
+  - There isn't a GitHub Pages site here
+  status_hints:
+  - 404
+  claimable: true
+  grade: high
+- provider: GoDaddy parked domain
+  cname_suffixes:
+  - domaincontrol.com
+  claimable: false
+  grade: low
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Domain parking page
+  - This web page is parked for FREE
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: GoHire
+  cname_suffixes:
+  - gohire.io
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Unrecognised domain
+  - ERR_NGROK
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Great Pages
+  cname_suffixes:
+  - mypages.club
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Página não encontrada
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Hatena Blog
+  cname_suffixes:
+  - hatenablog.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - 404 Blog is not found
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Help Scout
+  cname_suffixes:
+  - helpscoutdocs.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - No settings were found for this company
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: HelpDocs
+  cname_suffixes:
+  - helpdocs.io
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - This knowledge base is not available
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Helpjuice
+  cname_suffixes:
+  - helpjuice.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - We could not find what you're looking for.
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Helprace
+  cname_suffixes:
+  - helprace.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Alias not configured
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Heroku
+  cname_suffixes:
+  - herokuapp.com
+  - herokudns.com
+  body_fingerprints:
+  - No such app
+  - herokucdn.com/error-pages/no-such-app.html
+  status_hints:
+  - 404
+  claimable: true
+  grade: high
+- provider: HubSpot
+  cname_suffixes:
+  - hubspot.net
+  - hs-sites.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Domain not found
+  - does not exist in our system
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Intercom
+  cname_suffixes:
+  - custom.intercom.help
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - This page is reserved for artistic dogs
+  - Uh oh. That page doesn't exist
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: JazzHR
+  cname_suffixes:
+  - applytojob.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - This account no longer active
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: JetBrains
+  cname_suffixes:
+  - myjetbrains.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - is not a registered InCloud YouTrack
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Kinsta
+  cname_suffixes:
+  - kinsta.cloud
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - No Site For Domain
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: LaunchRock
+  cname_suffixes:
+  - launchrock.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - It looks like you may have taken a wrong turn somewhere
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Leadpages
+  cname_suffixes:
+  - lpages.co
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - This page is unavailable
+  - domain not found
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Mashery
+  cname_suffixes:
+  - mashery.com
+  claimable: false
+  grade: low
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Unrecognized domain
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Meteor
+  cname_suffixes:
+  - meteor.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - 404 Not Found
+  - meteor.com
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Netlify
+  cname_suffixes:
+  - netlify.app
+  - netlify.com
+  title_fingerprints:
+  - Not Found - Netlify
+  status_hints:
+  - 404
+  claimable: true
+  grade: medium
+- provider: ngrok
+  cname_suffixes:
+  - ngrok.io
+  - ngrok-free.app
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - ngrok.io not found
+  - Tunnel .* not found
+  - ERR_NGROK_
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Pagewiz
+  cname_suffixes:
+  - pagewiz.net
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Sorry, this page is no longer available
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Pantheon
+  cname_suffixes:
+  - pantheonsite.io
+  body_fingerprints:
+  - The gods are wise
+  status_hints:
+  - 404
+  claimable: true
+  grade: medium
+- provider: Pingdom
+  cname_suffixes:
+  - stats.pingdom.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Public Report Not Activated
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Proposify
+  cname_suffixes:
+  - proposify.biz
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - If you need immediate assistance, please contact
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Read the Docs
+  cname_suffixes:
+  - readthedocs.io
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - unknown to Read the Docs
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: ReadMe
+  cname_suffixes:
+  - readme.io
+  - readmessl.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Project doesnt exist... yet!
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Redirect.pizza
+  cname_suffixes:
+  - redirect.pizza
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Domain not configured
+  - Unrecognized domain
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Shopify
+  cname_suffixes:
+  - myshopify.com
+  body_fingerprints:
+  - Sorry, this shop is currently unavailable
+  status_hints:
+  - 404
+  claimable: true
+  grade: medium
+- provider: Short.io
+  cname_suffixes:
+  - cname.short.io
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Link does not exist
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Simplebooklet
+  cname_suffixes:
+  - simplebooklet.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - We can't find this <a href=
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: SmartJobBoard
+  cname_suffixes:
+  - smartjobboard.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - This job board website is either expired or its domain name is invalid
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: SmugMug
+  cname_suffixes:
+  - domains.smugmug.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - '{"text":"Page Not Found"'
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Softr
+  cname_suffixes:
+  - softr.app
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - This Softr app is not available
+  - Page not found
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Sprintful
+  cname_suffixes:
+  - sprintful.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Domain not found
+  - is not registered with Sprintful
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Squadcast
+  cname_suffixes:
+  - squadcast.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Squadcast status page not found
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Statuspage
+  cname_suffixes:
+  - statuspage.io
+  body_fingerprints:
+  - You are being redirected
+  status_hints:
+  - 404
+  claimable: true
+  grade: medium
+- provider: Strikingly
+  cname_suffixes:
+  - s.strikinglydns.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - But if you're looking to build your own website
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Surge.sh
+  cname_suffixes:
+  - surge.sh
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - project not found
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: SurveyGizmo
+  cname_suffixes:
+  - privatedomain.sgizmo.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - data-html-name
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: SurveySparrow
+  cname_suffixes:
+  - surveysparrow.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Account not found
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Tave
+  cname_suffixes:
+  - clientsite.tave.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - <h1>Error 404</h1>
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Teamwork
+  cname_suffixes:
+  - teamwork.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Oops - We didn't find your site
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Tilda
+  cname_suffixes:
+  - tilda.ws
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Please renew your subscription
+  - Domain has been assigned
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Uberflip
+  cname_suffixes:
+  - read.uberflip.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Non-hub domain, redirecting to portal
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Unbounce
+  cname_suffixes:
+  - unbouncepages.com
+  body_fingerprints:
+  - The requested URL was not found on this server
+  status_hints:
+  - 404
+  claimable: true
+  grade: medium
+- provider: Uptime.com
+  cname_suffixes:
+  - uptime.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Sorry, we couldn't find that page
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: UptimeRobot
+  cname_suffixes:
+  - stats.uptimerobot.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - page not found
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: UserVoice
+  cname_suffixes:
+  - uservoice.com
+  claimable: true
+  grade: high
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - This UserVoice subdomain is currently available!
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Vend
+  cname_suffixes:
+  - vendecommerce.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Looks like you've traveled too far into cyberspace
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Wasabi
+  cname_suffixes:
+  - wasabisys.com
+  claimable: true
+  grade: high
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - <Code>NoSuchBucket</Code>
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Wishpond
+  cname_suffixes:
+  - wishpond.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - https://www.wishpond.com/404?utm_source
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Wix
+  cname_suffixes:
+  - wixdns.net
+  - wix.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Error ConnectYourDomain occurred
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: WordPress.com
+  cname_suffixes:
+  - wordpress.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Do you want to register
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Worksites
+  cname_suffixes:
+  - worksites.net
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Hello! Sorry, but the website you&rsquo;re looking for doesn&rsquo;t exist
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: WP Engine
+  cname_suffixes:
+  - wpeproxy.com
+  - wpenginepowered.com
+  body_fingerprints:
+  - The site you were looking for couldn't be found
+  status_hints:
+  - 404
+  claimable: true
+  grade: medium
+- provider: Wufoo
+  cname_suffixes:
+  - wufoo.com
+  claimable: true
+  grade: medium
+  source: nuclei-templates:http/takeovers
+  body_fingerprints:
+  - Profile not found
+  - Hmmm....something is not right
+  verify: dig +short {host} CNAME  &&  curl -sI https://{host}/
+- provider: Zendesk
+  cname_suffixes:
+  - zendesk.com
+  body_fingerprints:
+  - Help Center Closed
+  status_hints:
+  - 404
+  claimable: true
+  grade: medium
+verify_note: 'frogscope flags candidates from scan data alone. To confirm one, check whether the CNAME
+  target still resolves and whether the provider will let you claim the name. `frogscope verify --takeover`
+  (Phase 6) does this automatically, and is off by default.
+
+  '

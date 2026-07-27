@@ -1,0 +1,20 @@
+# Never build scan data into an image.
+data/
+*.csv
+!examples/*.csv
+!tests/fixtures/*.csv
+*.sqlite*
+*.db
+
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.git/
+.github/
+dist/
+build/
+*.egg-info/
+.claude/
+.DS_Store
