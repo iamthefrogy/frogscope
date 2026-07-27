@@ -51,7 +51,7 @@ export function SchedulePanel({ project }) {
     ${schedules && schedules.length ? html`<div class="scroll-x">
       <table class="plain">
         <thead><tr>
-          <th>Name</th><th>Targets</th><th>Cadence</th><th>Host cap</th>
+          <th>Name</th><th>Targets</th><th>Cadence</th>
           <th>Last run</th><th></th>
         </tr></thead>
         <tbody>${schedules.map((s) => html`
@@ -104,7 +104,6 @@ function ScheduleRow({ schedule: s, onChanged }) {
       ${(s.targets || []).slice(0, 2).join(', ')}${(s.targets || []).length > 2 ? '…' : ''}
     </td>
     <td>${cadence}</td>
-    <td class="num right">${s.max_hosts_cap}</td>
     <td class="subtle nowrap">
       ${s.last_run_at ? when(s.last_run_at) : 'never'}
       ${s.last_skip_reason ? html`<div><span class="chip" data-state="warn" title=${s.last_skip_reason}>skipped</span></div>` : null}
@@ -117,15 +116,21 @@ function ScheduleRow({ schedule: s, onChanged }) {
   </tr>`;
 }
 
-function ScheduleForm({ project, onCreated, onCancel }) {
+// `initial*` props let a caller that already has targets/profile/authorised
+// typed in elsewhere (`ScanPanel`'s inline "Schedule scan") seed this form
+// with them instead of asking for the same three things twice. Purely
+// initial state — editing them here doesn't reach back to the caller, same
+// one-way relationship `SchedulePanel`'s own standalone use of this form
+// already has with nothing.
+export function ScheduleForm({ project, onCreated, onCancel,
+                              initialTargets, initialProfile, initialAuthorised }) {
   const [name, setName] = useState('');
-  const [targets, setTargets] = useState('');
-  const [profile, setProfile] = useState('common');
+  const [targets, setTargets] = useState(initialTargets || '');
+  const [profile, setProfile] = useState(initialProfile || 'common');
   const [preset, setPreset] = useState('daily');
   const [timeOfDay, setTimeOfDay] = useState('03:00');
   const [dayOfWeek, setDayOfWeek] = useState(0);
-  const [maxHostsCap, setMaxHostsCap] = useState(500);
-  const [authorised, setAuthorised] = useState(false);
+  const [authorised, setAuthorised] = useState(Boolean(initialAuthorised));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -141,7 +146,6 @@ function ScheduleForm({ project, onCreated, onCancel }) {
         preset,
         time_of_day: timeOfDay,
         day_of_week: preset === 'weekly' ? Number(dayOfWeek) : null,
-        max_hosts_cap: Number(maxHostsCap),
         authorised,
         subfinder: true,
       });
@@ -178,16 +182,7 @@ function ScheduleForm({ project, onCreated, onCancel }) {
         onChange=${(e) => setDayOfWeek(e.target.value)}>
         ${WEEKDAYS.map((d, i) => html`<option value=${i}>${d}</option>`)}
       </select>` : null}
-      <label class="subtle" style="display:flex;align-items:center;gap:6px">
-        Max hosts per run
-        <input class="input" type="number" min="1" style="width:90px"
-          value=${maxHostsCap} onInput=${(e) => setMaxHostsCap(e.target.value)} />
-      </label>
     </div>
-    <p class="subtle" style="margin:0">
-      A run whose targets expand past this cap is skipped and logged rather than
-      probed unattended — there is nobody here at 3am to approve a surprise.
-    </p>
 
     <label class="facet-row">
       <input type="checkbox" checked=${authorised}

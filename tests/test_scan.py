@@ -90,15 +90,6 @@ def test_valid_domains_are_accepted_and_deduplicated():
     assert parsed.domains == ["example.com", "sub.example.org"]
 
 
-def test_an_unknown_option_is_refused_not_ignored():
-    """Silently dropping a flag somebody thought they enabled would make the
-    coverage report wrong — it would claim checks ran that could not have."""
-    with pytest.raises(opts.OptionError) as caught:
-        opts.parse({"domains": ["example.com"], "authorised": True,
-                    "flags": {"tech_detect": True, "exec_shell": True}})
-    assert "exec_shell" in str(caught.value)
-
-
 def test_every_numeric_bound_is_enforced():
     """An unbounded rate limit against someone else's estate is a denial of
     service, not a preference."""
@@ -182,22 +173,13 @@ def test_httpx_argv_is_a_list_of_separate_arguments():
         assert not set(part) & set(";|&`$><\n"), part
 
 
-def test_only_enabled_flags_appear():
-    parsed = opts.parse({
-        "domains": ["example.com"], "authorised": True,
-        "flags": dict.fromkeys(opts.FLAGS, False),
-    })
+def test_every_httpx_flag_always_appears():
+    """No opt-in toggle left — every collection flag runs on every scan,
+    regardless of what (if anything) a caller passes."""
+    parsed = opts.parse({"domains": ["example.com"], "authorised": True})
     argv = opts.httpx_argv("httpx", parsed, input_path="i", output_path="o")
-    for spec in opts.FLAGS.values():
-        assert spec["flag"][0] not in argv
-
-    parsed = opts.parse({
-        "domains": ["example.com"], "authorised": True,
-        "flags": dict.fromkeys(opts.FLAGS, True),
-    })
-    argv = opts.httpx_argv("httpx", parsed, input_path="i", output_path="o")
-    for spec in opts.FLAGS.values():
-        assert spec["flag"][0] in argv
+    for flag in opts.HTTPX_FLAGS:
+        assert flag in argv
 
 
 def test_the_port_list_comes_from_the_named_profile():
@@ -220,7 +202,6 @@ def test_the_ui_catalogue_matches_what_can_actually_run():
     """The form is generated from the same tables that build argv, so it cannot
     offer an option the server would reject."""
     catalogue = opts.catalogue()
-    assert set(catalogue["flags"]) == set(opts.FLAGS)
     assert set(catalogue["profiles"]) == set(opts.PORT_PROFILES)
     assert catalogue["default_profile"] in catalogue["profiles"]
     assert set(catalogue["target_kinds"]) == set(opts.TARGET_KINDS)
@@ -375,6 +356,56 @@ def test_tool_inventory_never_raises_when_nothing_is_installed(monkeypatch):
     for tool in found.values():
         assert tool.available is False
         assert tool.install_hint
+
+
+# ── Empty results are not errors ─────────────────────────────────────────────
+#
+# A domain with no live subdomains, or a target list nothing answers on, is a
+# legitimate outcome — not a failure of the tool. `EmptyResult` (distinct
+# from `ScanError`) is what lets the UI (scan.js's `ScanOutcome`) say so
+# calmly instead of showing the same red "scan failed" a missing tool or a
+# crashed subprocess gets.
+
+def test_a_domain_with_nothing_resolved_is_an_empty_result_not_an_error(monkeypatch, tmp_path):
+    from frogscope.scan.runner import EmptyResult
+
+    parsed = opts.parse({"domains": ["example.com"], "authorised": True})
+    run = ScanRun(parsed, workdir=tmp_path)
+    monkeypatch.setattr(tools, "missing", lambda: [])
+    monkeypatch.setattr(run, "_resolve_targets", lambda directory: [])
+
+    with pytest.raises(EmptyResult) as caught:
+        run.run()
+    assert "example.com" in str(caught.value)
+
+
+def test_an_unresolvable_ip_or_cidr_target_is_also_an_empty_result(monkeypatch, tmp_path):
+    from frogscope.scan.runner import EmptyResult
+
+    parsed = opts.parse({"targets": ["203.0.113.5"], "authorised": True})
+    run = ScanRun(parsed, workdir=tmp_path)
+    monkeypatch.setattr(tools, "missing", lambda: [])
+    monkeypatch.setattr(run, "_resolve_targets", lambda directory: [])
+
+    with pytest.raises(EmptyResult) as caught:
+        run.run()
+    assert "resolved to nothing" in str(caught.value)
+
+
+def test_httpx_probing_nothing_live_is_an_empty_result_not_an_error(monkeypatch, tmp_path):
+    from frogscope.scan.runner import EmptyResult
+
+    parsed = opts.parse({"domains": ["example.com"], "authorised": True})
+    run = ScanRun(parsed, workdir=tmp_path)
+    monkeypatch.setattr(tools, "missing", lambda: [])
+    monkeypatch.setattr(run, "_resolve_targets", lambda directory: ["a.example.com"])
+    monkeypatch.setattr(run, "_port_scan", lambda directory, hosts: None)
+    # Leaves `csv_file` unwritten — httpx exited cleanly but nothing answered.
+    monkeypatch.setattr(run, "_probe", lambda hosts_file, csv_file, **kwargs: None)
+
+    with pytest.raises(EmptyResult) as caught:
+        run.run()
+    assert "none answered" in str(caught.value)
 
 
 def test_missing_defaults_to_core_tools_only(monkeypatch):
@@ -632,22 +663,19 @@ def test_the_manual_commands_come_from_the_same_tables_the_scanner_uses():
     steps = opts.manual_commands()
     httpx_step = next(s for s in steps if "httpx" in s["command"])
 
-    parsed = opts.ScanOptions(
-        domains=["example.com"], profile=opts.DEFAULT_PROFILE,
-        flags={name: spec["default"] for name, spec in opts.FLAGS.items()})
+    parsed = opts.ScanOptions(domains=["example.com"], profile=opts.DEFAULT_PROFILE)
     expected = opts.httpx_argv("httpx", parsed, input_path="hosts.txt",
                                output_path="scan.csv")
     assert httpx_step["command"] == " ".join(expected)
 
 
-def test_the_guide_enables_every_flag_that_is_on_by_default():
+def test_the_guide_enables_every_collection_flag():
     """Otherwise the manual route produces a CSV that unlocks fewer checks than the
     built-in scanner would."""
     steps = opts.manual_commands()
     command = next(s["command"] for s in steps if "httpx" in s["command"])
-    for name, spec in opts.FLAGS.items():
-        if spec["default"]:
-            assert spec["flag"][0] in command, name
+    for flag in opts.HTTPX_FLAGS:
+        assert flag in command
 
 
 def test_the_guide_starts_with_subdomain_discovery():

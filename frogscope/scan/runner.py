@@ -43,6 +43,15 @@ class ScanError(RuntimeError):
     pass
 
 
+class EmptyResult(RuntimeError):
+    """The scan ran to completion and genuinely found nothing to probe or
+    nothing that answered — a domain with no live subdomains, an address
+    range that resolved to nothing, a host list that probed clean. Distinct
+    from `ScanError`: nothing here needs fixing on this machine, so the UI
+    should say so calmly rather than showing the same red "scan failed" it
+    shows for a missing tool or a crashed subprocess."""
+
+
 class Cancelled(RuntimeError):
     pass
 
@@ -170,14 +179,16 @@ class ScanRun:
         hosts = self._resolve_targets(directory)
         if not hosts:
             if self.options.domains:
-                raise ScanError(
-                    "No hosts to probe. Subdomain enumeration found nothing for "
-                    f"{', '.join(self.options.domains)} — check the domain is "
-                    f"right, or untick enumeration to probe the domains "
-                    f"themselves.")
-            raise ScanError(
-                "No hosts to probe. The address(es) or range(s) given resolved "
-                "to nothing.")
+                raise EmptyResult(
+                    "Subdomain enumeration found nothing for "
+                    f"{', '.join(self.options.domains)}. Either the domain "
+                    f"isn't live, has no discoverable subdomains, or "
+                    f"enumeration's passive sources came up empty — try "
+                    f"unticking enumeration to probe the domain itself "
+                    f"instead.")
+            raise EmptyResult(
+                "The address(es) or range(s) given resolved to nothing — "
+                "there's nothing there to probe.")
 
         if (len(hosts) > opts.CONFIRM_ABOVE
                 and self.options.approved_hosts < len(hosts)):
@@ -193,10 +204,11 @@ class ScanRun:
         self._probe(hosts_file, csv_file, ports_prescoped=ports_prescoped)
 
         if not csv_file.exists() or not csv_file.stat().st_size:
-            raise ScanError(
-                f"httpx probed {len(hosts)} host(s) and none answered. That can be "
-                f"correct — but check network egress and whether the ports in this "
-                f"profile are reachable from here.")
+            raise EmptyResult(
+                f"httpx probed {len(hosts)} host(s) and none answered. Most "
+                f"often this just means nothing is live on the ports this "
+                f"profile checks — if you expected a response, check network "
+                f"egress from here and that the target is actually reachable.")
 
         # DNS/network analysis and TLS certificate reading are both core, not
         # opt-in — see `_correlate()`. Every scan gets all of it.

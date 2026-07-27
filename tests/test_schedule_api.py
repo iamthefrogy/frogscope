@@ -49,7 +49,7 @@ def project(client):
 def _create(client, project, **overrides):
     payload = {
         "name": "nightly", "targets": ["example.com"], "profile": "web",
-        "preset": "daily", "time_of_day": "03:00", "max_hosts_cap": 50,
+        "preset": "daily", "time_of_day": "03:00",
         "authorised": True, "subfinder": False,
     }
     payload.update(overrides)
@@ -108,9 +108,15 @@ def test_an_unknown_preset_is_rejected(client, project):
     assert resp.status_code == 400
 
 
-def test_max_hosts_cap_must_be_a_positive_number(client, project):
-    assert _create(client, project, max_hosts_cap=0).status_code == 400
-    assert _create(client, project, max_hosts_cap="a lot").status_code == 400
+def test_a_schedule_has_no_configurable_host_cap(client, project):
+    """There is nothing left to validate here — `MAX_HOSTS` (options.py) is
+    the one unconditional ceiling, not user input, so a schedule always
+    auto-approves everything it finds up to that same limit every other scan
+    already respects."""
+    from frogscope.scan import options as scan_options
+
+    created = _create(client, project).get_json()["schedule"]
+    assert created["max_hosts_cap"] == scan_options.MAX_HOSTS
 
 
 def test_bad_targets_are_rejected_the_same_way_a_manual_scan_would_be(client, project):
@@ -143,8 +149,8 @@ def test_create_list_patch_delete_round_trip(client, project):
     assert any(s["id"] == sid for s in listed)
 
     patched = client.patch(f"/api/schedules/{sid}",
-                           json={"max_hosts_cap": 250}).get_json()["schedule"]
-    assert patched["max_hosts_cap"] == 250
+                           json={"enabled": False}).get_json()["schedule"]
+    assert patched["enabled"] == 0
 
     deleted = client.delete(f"/api/schedules/{sid}").get_json()
     assert deleted["deleted"] is True
@@ -197,13 +203,15 @@ def test_tick_processes_a_due_schedule_and_reschedules_it(client, project, cfg):
     assert datetime.fromisoformat(refreshed["next_run_at"]) > datetime.now(UTC)
 
 
-def test_tick_skips_a_run_that_would_exceed_the_host_cap(client, project):
-    """A cap of 1 host against a real domain that resolves to at least one
-    live endpoint should still fit — this asserts the OTHER direction: a
-    schedule whose targets can't be resolved at all skips cleanly rather
-    than raising out of the scheduler loop."""
-    created = _create(client, project, targets=["this-domain-does-not-exist-frogscope-test.invalid"],
-                      max_hosts_cap=1).get_json()["schedule"]
+def test_tick_skips_cleanly_when_targets_resolve_to_nothing(client, project):
+    """A schedule whose targets can't be resolved at all (`EmptyResult`,
+    scan/runner.py) skips cleanly and records why, rather than raising out
+    of the scheduler loop — same handling `ScanError`/`Cancelled` already
+    get."""
+    created = _create(
+        client, project,
+        targets=["this-domain-does-not-exist-frogscope-test.invalid"],
+    ).get_json()["schedule"]
     resp = client.post(f"/api/schedules/{created['id']}/run-now")
     assert resp.status_code == 200
     schedule = resp.get_json()["schedule"]

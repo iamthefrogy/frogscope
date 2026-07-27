@@ -121,7 +121,7 @@ export function CertificatesView({ run, project, onNavigate }) {
         <tbody>${detail.observations.map((o) => html`<tr>
           <td><a href="#" onClick=${(e) => {
             e.preventDefault();
-            onNavigate('endpoints', { filters: { host: [o.host] } });
+            onNavigate('exec', { filters: { host: [o.host] } });
           }}>${o.host}</a></td>
           <td><code>${o.ip || '—'}</code></td>
           <td class="num right">${o.port}</td>

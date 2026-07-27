@@ -148,7 +148,8 @@ function FilterWidget({ column, value, facet, onChange }) {
 
 // ── Grid ────────────────────────────────────────────────────────────────────
 
-export function DataGrid({ columns, rows, sort, filters, facets, onSort, onFilter, onRow }) {
+export function DataGrid({ columns, rows, sort, filters, facets, onSort, onFilter, onRow,
+                          scrollRef }) {
   const [showFilters, setShowFilters] = useState(true);
 
   if (!columns.length) {
@@ -159,7 +160,7 @@ export function DataGrid({ columns, rows, sort, filters, facets, onSort, onFilte
   const sortKey = String(sort || '').replace(/^[-+]/, '');
   const sortDesc = String(sort || '').startsWith('-');
 
-  return html`<div class="grid-wrap">
+  return html`<div class="grid-wrap" ref=${scrollRef}>
     <table class="grid">
       <thead>
         <tr>
@@ -215,8 +216,22 @@ export function ColumnPicker({ catalog, groups, visible, presets, onChange, onCl
       : [...visible, key]);
   };
 
+  // Both master and per-group tickboxes act on what's currently on screen —
+  // the filtered-by-search set, not the whole catalog — so they stay
+  // consistent with each other and with what the user is actually looking
+  // at. `catalog.map(...)`'s own "Everything" button above still means the
+  // literal, unfiltered, whole-catalog case.
+  const toggleKeys = (keys) => {
+    const allOn = keys.every((k) => visible.includes(k));
+    onChange(allOn
+      ? visible.filter((k) => !keys.includes(k))
+      : [...new Set([...visible, ...keys])]);
+  };
+
   const orderedGroups = Object.keys(byGroup).sort(
     (a, b) => ((groups[a] && groups[a].order) || 99) - ((groups[b] && groups[b].order) || 99));
+  const shownKeys = orderedGroups.flatMap((g) => byGroup[g].map((c) => c.key));
+  const allShown = shownKeys.length > 0 && shownKeys.every((k) => visible.includes(k));
 
   return html`<div class="drawer-backdrop" onClick=${onClose}>
     <div class="drawer" style="width:min(560px,100vw)" onClick=${(e) => e.stopPropagation()}>
@@ -230,7 +245,7 @@ export function ColumnPicker({ catalog, groups, visible, presets, onChange, onCl
         <input class="input" style="width:100%;margin-bottom:10px" placeholder="Filter columns…"
           value=${search} onInput=${(e) => setSearch(e.target.value)} />
 
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
           ${Object.entries(presets || {}).map(([id, preset]) => html`
             <button class="btn btn-sm" onClick=${() => onChange(preset.columns)}>
               ${preset.label}
@@ -239,16 +254,31 @@ export function ColumnPicker({ catalog, groups, visible, presets, onChange, onCl
             onClick=${() => onChange(catalog.map((c) => c.key))}>Everything</button>
         </div>
 
-        ${orderedGroups.map((group) => html`<div style="margin-bottom:14px">
-          <div class="facet-title">${(groups[group] && groups[group].label) || group}</div>
-          ${byGroup[group].map((col) => html`
-            <label class="facet-row">
-              <input type="checkbox" checked=${visible.includes(col.key)}
-                onChange=${() => toggle(col.key)} />
-              <span class="label" title=${col.description}>${col.label}</span>
-              ${col.description && html`<span class="count">?</span>`}
-            </label>`)}
-        </div>`)}
+        <label class="facet-row" style="margin-bottom:14px;font-weight:600">
+          <input type="checkbox" checked=${allShown}
+            onChange=${() => toggleKeys(shownKeys)} />
+          <span class="label">Select all${needle ? ' (matching)' : ''}</span>
+        </label>
+
+        ${orderedGroups.map((group) => {
+          const groupKeys = byGroup[group].map((c) => c.key);
+          const groupAll = groupKeys.every((k) => visible.includes(k));
+          return html`<div style="margin-bottom:14px">
+            <label class="facet-row" style="font-weight:600">
+              <input type="checkbox" checked=${groupAll}
+                onChange=${() => toggleKeys(groupKeys)} />
+              <span class="label facet-title" style="margin:0">
+                ${(groups[group] && groups[group].label) || group}</span>
+            </label>
+            ${byGroup[group].map((col) => html`
+              <label class="facet-row" style="padding-left:22px">
+                <input type="checkbox" checked=${visible.includes(col.key)}
+                  onChange=${() => toggle(col.key)} />
+                <span class="label" title=${col.description}>${col.label}</span>
+                ${col.description && html`<span class="count">?</span>`}
+              </label>`)}
+          </div>`;
+        })}
       </div>
     </div>
   </div>`;

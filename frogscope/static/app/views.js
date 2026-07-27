@@ -3,14 +3,14 @@
 // that needs them says so rather than showing an empty box.
 
 import { h } from 'preact';
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import htm from 'htm';
 import { SNAP, authFetch, store } from './store.js';
 import { Facets } from './facets.js';
 import { ColumnPicker, DataGrid } from './grid.js';
 import { Drawer } from './drawer.js';
 import { SEVERITY, SeverityChip } from './risk.js';
-import { DangerZone, DeleteRunButton, ProjectChooser, Uploader } from './manage.js';
+import { DangerZone, DeleteRunButton, ProjectChooser } from './manage.js';
 import { CardTitle } from './help.js';
 import { ScanPanel } from './scan.js';
 import { SchedulePanel } from './schedule.js';
@@ -130,7 +130,7 @@ export function OverviewView({ run, project, onNavigate }) {
           <th class="right">Findings</th><th>Environment</th></tr></thead>
         <tbody>${risk.top_hosts.slice(0, 8).map((hst) => html`<tr>
           <td><a href="#" onClick=${(e) => { e.preventDefault();
-            onNavigate('endpoints', { filters: { host: [hst.host] } }); }}>
+            onNavigate('exec', { filters: { host: [hst.host] } }); }}>
             ${hst.host_display || hst.host}</a></td>
           <td><${SeverityChip} severity=${hst.risk_band} /></td>
           <td class="num right">${hst.risk_score}</td>
@@ -177,13 +177,13 @@ export function OverviewView({ run, project, onNavigate }) {
             const meta = responseClassMeta(k);
             return `${meta.glyph} ${meta.label}`;
           }}
-          onPick=${(k) => onNavigate('endpoints', { filters: { response_class: [k] } })} />
+          onPick=${(k) => onNavigate('exec', { filters: { response_class: [k] } })} />
       </div>
       <div class="card">
         <h3>Hosts by environment</h3>
         <${Breakdown} data=${s.by_env} total=${s.hosts || 1}
           labeller=${(k) => titleCase(k)}
-          onPick=${(k) => onNavigate('endpoints', { filters: { env: [k] } })} />
+          onPick=${(k) => onNavigate('exec', { filters: { env: [k] } })} />
       </div>
     </div>
 
@@ -230,7 +230,8 @@ function Breakdown({ data, total, labeller, onPick }) {
 
 // ── Endpoints grid ──────────────────────────────────────────────────────────
 
-export function EndpointsView({ run, project, catalog, state, onState, extraFilters }) {
+export function EndpointsView({ run, project, catalog, state, onState, extraFilters,
+                               onSaveColumnsDefault }) {
   const [result, setResult] = useState(null);
   const [facets, setFacets] = useState({});
   const [loading, setLoading] = useState(true);
@@ -243,7 +244,9 @@ export function EndpointsView({ run, project, catalog, state, onState, extraFilt
   const [omnibox, setOmnibox] = useState(state.search || '');
   const [saved, setSaved] = useState([]);
   const [savePrompt, setSavePrompt] = useState(false);
+  const [columnsRemembered, setColumnsRemembered] = useState(false);
   const [saveName, setSaveName] = useState('');
+  const gridWrapRef = useRef(null);
 
   const loadSaved = () => {
     const q = new URLSearchParams();
@@ -274,7 +277,7 @@ export function EndpointsView({ run, project, catalog, state, onState, extraFilt
   const visible = state.columns || catalog.default_visible || [];
   const filters = state.filters || {};
   const page = state.page || 1;
-  const pageSize = state.pageSize || 100;
+  const pageSize = state.pageSize || 50;
 
   useEffect(() => {
     let cancelled = false;
@@ -384,6 +387,13 @@ export function EndpointsView({ run, project, catalog, state, onState, extraFilt
         ${showFacets ? '◂ Hide filters' : '▸ Filters'}</button>
       <button class="btn" onClick=${() => setShowPicker(true)}>
         Columns (${visible.length})</button>
+      ${onSaveColumnsDefault ? html`<button class="btn" title="Remember this column
+        selection on this browser, so it's what you see next time"
+        onClick=${() => {
+          onSaveColumnsDefault(visible);
+          setColumnsRemembered(true);
+          setTimeout(() => setColumnsRemembered(false), 1500);
+        }}>${columnsRemembered ? '✓ Remembered' : 'Remember columns'}</button>` : null}
       <button class="btn" onClick=${() => store.download(store.exportUrl({
         run, project, filters, search: state.search, sort: state.sort, columns: visible,
       }, 'csv'), 'endpoints.csv')}>CSV</button>
@@ -444,7 +454,7 @@ export function EndpointsView({ run, project, catalog, state, onState, extraFilt
           filters=${filters} facets=${facets}
           onSort=${(s) => onState({ sort: s })}
           onFilter=${setFilter}
-          onRow=${(row) => setDrawerKey(row.endpoint_key)} />` : null}
+          onRow=${(row) => setDrawerKey(row.endpoint_key)} scrollRef=${gridWrapRef} />` : null}
 
         ${result ? html`<div class="pager">
           <span class="muted">
@@ -454,13 +464,20 @@ export function EndpointsView({ run, project, catalog, state, onState, extraFilt
           <span class="spacer"></span>
           <select class="input" value=${String(pageSize)}
             onChange=${(e) => onState({ pageSize: Number(e.target.value), page: 1 })}>
-            ${[100, 250, 500, 1000].map((n) => html`<option value=${n}>${n} / page</option>`)}
+            ${[10, 25, 50].map((n) => html`<option value=${n}>${n} / page</option>`)}
           </select>
           <button class="btn btn-sm" disabled=${page <= 1}
             onClick=${() => onState({ page: page - 1 })}>Prev</button>
           <span class="muted">${page} / ${result.pages}</span>
           <button class="btn btn-sm" disabled=${page >= result.pages}
             onClick=${() => onState({ page: page + 1 })}>Next</button>
+          <span class="spacer"></span>
+          <button class="btn btn-sm" title="Scroll the table left"
+            onClick=${() => gridWrapRef.current
+              && gridWrapRef.current.scrollBy({ left: -400, behavior: 'smooth' })}>◀</button>
+          <button class="btn btn-sm" title="Scroll the table right"
+            onClick=${() => gridWrapRef.current
+              && gridWrapRef.current.scrollBy({ left: 400, behavior: 'smooth' })}>▶</button>
         </div>` : null}
       </div>
     </div>
@@ -487,8 +504,23 @@ function copyHosts(result) {
 // set. `presets`/`filter_presets` are dropped rather than filtered: they are
 // column-set/filter shortcuts built for the full "All Assets" catalog and can
 // reference fields outside a category's scope.
-function scopeCatalog(catalog, keys) {
-  const allowed = new Set(keys);
+function scopeCatalog(catalog, keys, excludeKeys) {
+  const excluded = new Set(excludeKeys || []);
+  // `null` means "no restriction" — the Summary leaderboard's "All" chip
+  // wants the full, unscoped catalog (every column, every preset), not a
+  // category subset. `excludeKeys` still applies on top of that: a handful
+  // of columns (e.g. `top_finding`) can be dropped everywhere — the table,
+  // the Columns picker, Facets — without narrowing the rest of the catalog.
+  if (!keys) {
+    if (!excluded.size) return catalog;
+    return {
+      ...catalog,
+      columns: (catalog.columns || []).filter((c) => !excluded.has(c.key)),
+      default_visible: (catalog.default_visible || []).filter((k) => !excluded.has(k)),
+      empty_source_columns: (catalog.empty_source_columns || []).filter((k) => !excluded.has(k)),
+    };
+  }
+  const allowed = new Set(keys.filter((k) => !excluded.has(k)));
   return {
     ...catalog,
     columns: (catalog.columns || []).filter((c) => allowed.has(c.key)),
@@ -499,19 +531,46 @@ function scopeCatalog(catalog, keys) {
   };
 }
 
+// `frogscope:columns:<persistKey>` — a per-browser remembered column
+// selection. Deliberately localStorage, not the server-side "Save view"
+// feature just below it: that one names, stores, and shares a full
+// filter+sort+column snapshot per project; this is the lighter "just
+// remember which columns I like" preference, per person, that applies the
+// moment the tab is opened rather than requiring a pick from the Views menu.
+function loadPersistedColumns(persistKey) {
+  if (!persistKey) return null;
+  try {
+    const raw = localStorage.getItem(`frogscope:columns:${persistKey}`);
+    const parsed = raw && JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length ? parsed : null;
+  } catch { return null; }
+}
+
+function savePersistedColumns(persistKey, columns) {
+  if (!persistKey) return;
+  localStorage.setItem(`frogscope:columns:${persistKey}`, JSON.stringify(columns));
+}
+
 // `EndpointsView` with its own private state and a restricted catalog —
 // "All Assets" is the master table; each of these is that same table
 // pre-scoped to one category's columns, filters, and (via `defaultFilters`)
 // rows. State resets to the given defaults each time the tab is mounted,
 // same lifecycle every other non-`endpoints` tab already has, so switching
 // tabs never leaks one category's filters/columns into another.
-export function ScopedEndpointsView({ run, project, catalog, columnKeys,
-                                     defaultColumns, defaultFilters, hiddenFilters }) {
-  const scoped = useMemo(() => scopeCatalog(catalog, columnKeys), [catalog, columnKeys]);
-  const [state, setState] = useState({ columns: defaultColumns, filters: defaultFilters || {} });
+export function ScopedEndpointsView({ run, project, catalog, columnKeys, excludeKeys,
+                                     defaultColumns, defaultFilters, hiddenFilters,
+                                     defaultSort, persistKey }) {
+  const scoped = useMemo(() => scopeCatalog(catalog, columnKeys, excludeKeys),
+    [catalog, columnKeys, excludeKeys]);
+  const [state, setState] = useState({
+    columns: loadPersistedColumns(persistKey) || defaultColumns,
+    filters: defaultFilters || {}, sort: defaultSort,
+  });
   const onState = (patch) => setState((prev) => ({ ...prev, ...patch }));
   return html`<${EndpointsView} run=${run} project=${project} catalog=${scoped}
-    state=${state} onState=${onState} extraFilters=${hiddenFilters} />`;
+    state=${state} onState=${onState} extraFilters=${hiddenFilters}
+    onSaveColumnsDefault=${persistKey
+      ? (cols) => savePersistedColumns(persistKey, cols) : null} />`;
 }
 
 // ── Hosts ───────────────────────────────────────────────────────────────────
@@ -547,7 +606,7 @@ export function HostsView({ run, project, onNavigate }) {
         </tr></thead>
         <tbody>
           ${hosts.map((hst) => html`<tr key=${hst.host}
-            onClick=${() => onNavigate('endpoints', { filters: { host: [hst.host] } })}
+            onClick=${() => onNavigate('exec', { filters: { host: [hst.host] } })}
             style="cursor:pointer">
             <td>${hst.host_display || hst.host}</td>
             <td>${hst.env}</td>
@@ -694,8 +753,8 @@ export function RunsView({ projects, project, onSelect, onProjectsChanged,
         <div class="card" style="margin-bottom:16px">
           <${CardTitle} topic="runs.projects">Project<//>
           <p class="subtle" style="margin:0 0 10px">
-            Scans are compared within a project, never across them. Uploads below
-            go into whichever project is selected here.
+            Scans are compared within a project, never across them. A scan run
+            below goes into whichever project is selected here.
           </p>
           <${ProjectChooser} projects=${projects} value=${project}
             onSelect=${onSelect}
@@ -709,17 +768,6 @@ export function RunsView({ projects, project, onSelect, onProjectsChanged,
         <${ScanPanel} project=${project} onIngested=${() => {
           refresh(); onIngested && onIngested();
         }} />
-
-        <div class="card" style="margin-bottom:16px">
-          <${CardTitle} topic="runs.upload">Or upload a scan file<//>
-          <p class="subtle" style="margin:0 0 10px">
-            Already have httpx output? Drop it in. The analysis is identical
-            whether the data came from a scan run here or from your own machine.
-          </p>
-          <${Uploader} project=${project} onIngested=${() => {
-            refresh(); onIngested && onIngested();
-          }} />
-        </div>
 
         <${SchedulePanel} project=${project} />
       </div>`}

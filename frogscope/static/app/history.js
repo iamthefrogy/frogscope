@@ -9,7 +9,7 @@ import { h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import htm from 'htm';
 import { Sparkline, seriesColour } from './charts.js';
-import { num, titleCase, when } from './lib.js';
+import { num, titleCase } from './lib.js';
 import { SeverityChip } from './risk.js';
 import { CardTitle } from './help.js';
 import { authFetch } from './store.js';
@@ -35,7 +35,36 @@ function DirectionChip({ direction }) {
     ${meta.glyph} ${meta.label}</span>`;
 }
 
-// ── Changes ─────────────────────────────────────────────────────────────────
+// ── What changed ────────────────────────────────────────────────────────────
+//
+// One tab, not two: each category (Risk / Applications / Infrastructure)
+// shows its own trend line *and* what specifically moved in that category
+// since the last scan, rather than "since last scan" and "over time" living
+// on separate tabs a reader has to cross-reference by hand.
+
+// Trend metrics, grouped the same three-ish ways the field-level diffs below
+// are classified — so a category card's sparkline and its "what changed"
+// list are always describing the same slice of the estate.
+const TREND_GROUPS = [
+  { key: 'risk', title: 'Risk', metrics: ['posture_index_host', 'posture_index_endpoint',
+    'hosts_needing_attention', 'findings_total', 'findings_critical', 'findings_high'] },
+  { key: 'applications', title: 'Applications', metrics: ['hosts', 'real_endpoints',
+    'nonprod_exposed', 'remote_access', 'mgmt_surfaces'] },
+  { key: 'infrastructure', title: 'Infrastructure', metrics: ['no_waf_hosts',
+    'origin_exposed_hosts', 'eol_hosts', 'takeover_candidates'] },
+];
+
+// Assigns a changed field (e.g. `cert_days_remaining`, `tech_count`) to one
+// of the three categories above — risk fields first (score/finding/severity
+// language), then anything network/cert/DNS/hosting shaped, everything else
+// falls to Applications. Same three-way split as the trend groups, just
+// derived from a field *name* instead of a fixed metric key.
+function classifyField(name) {
+  if (/^(risk_|worst_severity|finding|exposure|hygiene|sensitivity)/.test(name)) return 'risk';
+  if (/(^cert_|^tls_|^dns|^cname|^a$|^aaaa$|host_ip|^cidr|^ptr_|^cdn_|^hosting_|^edge_|^origin_|waf|proxy|jarm)/
+    .test(name)) return 'infrastructure';
+  return 'applications';
+}
 
 export function ChangesView({ run, project, onNavigate }) {
   const [data, setData] = useState(null);
@@ -45,6 +74,7 @@ export function ChangesView({ run, project, onNavigate }) {
   const [compareTo, setCompareTo] = useState('prev');
   const [adhoc, setAdhoc] = useState(null);
   const [expanded, setExpanded] = useState({});
+  const [trends, setTrends] = useState(null);
 
   useEffect(() => {
     setData(null);
@@ -67,6 +97,16 @@ export function ChangesView({ run, project, onNavigate }) {
     if (project) q.set('project', project);
     authFetch(`/api/diff?${q}`).then((r) => r.json()).then(setAdhoc).catch(() => setAdhoc(null));
   }, [compareTo, run, project]);
+
+  // Fetched independently of `data` (keyed on project only, not run/type/noisy)
+  // so toggling a change-type filter never re-fetches the whole trend series.
+  useEffect(() => {
+    setTrends(null);
+    const q = new URLSearchParams();
+    if (project) q.set('project', project);
+    authFetch(`/api/trends?${q}`).then((r) => r.json())
+      .then((d) => setTrends(d.error ? null : d)).catch(() => setTrends(null));
+  }, [project]);
 
   if (error) {
     return html`<div class="view-scroll"><div class="empty">
@@ -91,6 +131,17 @@ export function ChangesView({ run, project, onNavigate }) {
 
   const shown = data.assets.filter(
     (a) => !types.length || types.includes(a.change_type));
+
+  // Every changed field across the currently-shown assets, bucketed into the
+  // same three categories as `TREND_GROUPS` — this is what lets each
+  // category card say "and here's what specifically moved" next to its
+  // sparkline, without a second fetch or a second filter surface.
+  const byCategory = { risk: [], applications: [], infrastructure: [] };
+  shown.forEach((asset) => {
+    (asset.fields || []).forEach((f) => {
+      byCategory[classifyField(f.field)].push({ asset: asset.asset_key, field: f });
+    });
+  });
 
   return html`<div class="view">
     <div class="toolbar">
@@ -182,6 +233,47 @@ export function ChangesView({ run, project, onNavigate }) {
         as infrastructure or attacker activity.</div>
       </div>` : null}
 
+      <div style="display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));
+                  margin-bottom:14px">
+        ${TREND_GROUPS.map((group) => {
+          const metrics = trends && trends.enough_runs
+            ? group.metrics.filter((k) => trends.metrics[k]) : [];
+          const fieldChanges = byCategory[group.key];
+          return html`<div class="card">
+            <h3>${group.title}</h3>
+            ${metrics.length ? html`<div class="grid-cards">
+              ${metrics.map((key) => {
+                const metric = trends.metrics[key];
+                const values = metric.points.map((p) => p.value);
+                const last = values[values.length - 1];
+                return html`<div class="card kpi">
+                  <div style="display:flex;align-items:baseline;gap:8px">
+                    <span class="kpi-value" style="font-size:19px">${
+                      Number.isInteger(last) ? num(last) : last.toFixed(1)}</span>
+                    <${Delta} points=${metric.points} metric=${key} />
+                  </div>
+                  <div class="kpi-label">${metric.label}</div>
+                  <${Sparkline} points=${values} width=${100} height=${22}
+                    colour=${HIGHER_IS_BETTER.has(key)
+                      ? 'var(--status-good)' : seriesColour(0)} />
+                </div>`;
+              })}
+            </div>` : html`<p class="subtle" style="margin-top:0">
+              Trend needs at least two scans.</p>`}
+
+            <div class="kpi-label" style="margin:${metrics.length ? '12px' : '0'} 0 4px">
+              What changed since last scan (${fieldChanges.length})</div>
+            ${fieldChanges.length ? html`<div class="chip-list">
+              ${fieldChanges.slice(0, 8).map((c) => html`<span class="chip"
+                title=${`${c.asset}: ${c.field.summary}`}>
+                ${c.field.field.replace(/_/g, ' ')}</span>`)}
+              ${fieldChanges.length > 8 ? html`<span class="subtle"
+                style="font-size:11px">+${fieldChanges.length - 8} more below</span>` : null}
+            </div>` : html`<p class="subtle" style="margin:0">Nothing changed here.</p>`}
+          </div>`;
+        })}
+      </div>
+
       ${data.flapping.length ? html`<div class="card" style="margin-bottom:14px">
         <${CardTitle} topic="changes.flapping">Unstable assets (${data.flapping.length})<//>
         <p class="muted" style="margin-top:0">
@@ -242,7 +334,7 @@ export function ChangesView({ run, project, onNavigate }) {
               </table>
               <button class="btn btn-sm" style="margin-top:6px"
                 onClick=${(e) => { e.stopPropagation();
-                  onNavigate('endpoints', {
+                  onNavigate('exec', {
                     filters: { endpoint_key: [`~${asset.asset_key}`] } }); }}>
                 Open in the grid</button>
             </div>` : null}
@@ -278,116 +370,6 @@ function Delta({ points, metric }) {
   const formatted = Number.isInteger(change) ? change : change.toFixed(1);
   return html`<span style=${`color:${token};font-size:12px;font-weight:600`}>
     ${arrow} ${change > 0 ? '+' : ''}${formatted}</span>`;
-}
-
-export function TrendsView({ project, onNavigate }) {
-  const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    const q = new URLSearchParams();
-    if (project) q.set('project', project);
-    authFetch(`/api/trends?${q}`)
-      .then((r) => r.json())
-      .then((d) => (d.error ? setError(d.error) : setData(d)))
-      .catch((e) => setError(e.message));
-  }, [project]);
-
-  if (error) {
-    return html`<div class="view-scroll"><div class="banner error">${error}</div></div>`;
-  }
-  if (!data) return html`<div class="loading">Loading…</div>`;
-
-  if (!data.enough_runs) {
-    // Said plainly rather than drawn as a flat line, which would read as
-    // "nothing changed" when the truth is "nothing to compare".
-    return html`<div class="view-scroll"><div class="empty">
-      <h2>Trends need at least two scans</h2>
-      <p class="muted">${data.runs.length} scan ingested so far. Upload another
-        and every metric below gets a line.</p>
-      <button class="btn btn-primary" onClick=${() => onNavigate('runs')}>
-        Upload a scan</button>
-    </div></div>`;
-  }
-
-  const entries = Object.entries(data.metrics);
-  const groups = [
-    ['Posture', ['posture_index_host', 'posture_index_endpoint',
-                 'hosts_needing_attention']],
-    ['Findings', ['findings_total', 'findings_critical', 'findings_high']],
-    ['Surface', ['hosts', 'real_endpoints', 'no_waf_hosts',
-                 'origin_exposed_hosts', 'nonprod_exposed']],
-    ['Specific exposures', ['remote_access', 'mgmt_surfaces', 'eol_hosts',
-                            'takeover_candidates']],
-    ['Churn', ['changes_added', 'changes_removed', 'changes_modified']],
-  ];
-
-  const anyIncomplete = data.runs.some((r) => r.incomplete);
-  const rulesChanged = new Set(data.runs.map((r) => r.rules_hash).filter(Boolean)).size > 1;
-
-  return html`<div class="view-scroll">
-    <div class="muted" style="font-size:12px;margin-bottom:10px">
-      ${data.runs.length} scans, ${when(data.runs[0].started_at)} to
-      ${when(data.runs[data.runs.length - 1].started_at)}
-    </div>
-
-    ${anyIncomplete ? html`<div class="banner">
-      <span>▲</span>
-      <div>At least one scan in this series was flagged as possibly incomplete.
-      A truncated scan shows up as an improvement it did not earn, so treat any
-      dip with suspicion.</div>
-    </div>` : null}
-
-    ${rulesChanged ? html`<div class="banner">
-      <span>▲</span>
-      <div>The scoring rules changed during this series. Movement in score-based
-      metrics may be re-scoring rather than a real-world change. Run
-      <code>frogscope rescore --run all</code> to put every scan on the current
-      rules.</div>
-    </div>` : null}
-
-    ${groups.map(([title, keys]) => {
-      const present = keys.filter((k) => data.metrics[k]);
-      if (!present.length) return null;
-      return html`<div class="card">
-        <h3>${title}</h3>
-        <div class="grid-cards">
-          ${present.map((key) => {
-            const metric = data.metrics[key];
-            const values = metric.points.map((p) => p.value);
-            const last = values[values.length - 1];
-            return html`<div class="card kpi">
-              <div style="display:flex;align-items:baseline;gap:8px">
-                <span class="kpi-value" style="font-size:22px">${
-                  Number.isInteger(last) ? num(last) : last.toFixed(1)}</span>
-                <${Delta} points=${metric.points} metric=${key} />
-              </div>
-              <div class="kpi-label">${metric.label}</div>
-              <${Sparkline} points=${values} width=${120} height=${28}
-                colour=${HIGHER_IS_BETTER.has(key)
-                  ? 'var(--status-good)' : seriesColour(0)} />
-              <div class="kpi-note">${values.map((v) =>
-                Number.isInteger(v) ? v : v.toFixed(1)).join(' → ')}</div>
-            </div>`;
-          })}
-        </div>
-      </div>`;
-    })}
-
-    <div class="card">
-      <h3>Reading these</h3>
-      <p class="muted" style="margin-top:0">
-        A rising absolute count with a flat index means the estate is growing and
-        the new assets are about as healthy as the existing ones — worth knowing,
-        and easy to miss if you only watch the index.
-      </p>
-      <p class="muted" style="margin-bottom:0">
-        Churn metrics count assets appearing and disappearing. Assets that toggle
-        repeatedly are excluded from those counts and listed under Changes as
-        unstable instead.
-      </p>
-    </div>
-  </div>`;
 }
 
 // ── Endpoint history, for the drawer ────────────────────────────────────────

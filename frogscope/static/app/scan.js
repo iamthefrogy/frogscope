@@ -20,6 +20,7 @@ import { SNAP, store } from './store.js';
 import { CardTitle, Help } from './help.js';
 import { num } from './lib.js';
 import { takePendingScanTargets } from './discovered.js';
+import { ScheduleForm } from './schedule.js';
 
 const html = htm.bind(h);
 
@@ -48,12 +49,13 @@ export function ScanPanel({ project, onIngested, embedded }) {
   const [tools, setTools] = useState(null);
   const [targets, setTargets] = useState('');
   const [profile, setProfile] = useState('');
-  const [flags, setFlags] = useState({});
   const [label, setLabel] = useState('');
   const [subfinder, setSubfinder] = useState(true);
   const [authorised, setAuthorised] = useState(false);
   const [rateLimit, setRateLimit] = useState(150);
   const [advanced, setAdvanced] = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [scheduled, setScheduled] = useState(false);
   const [job, setJob] = useState(null);
   const [error, setError] = useState('');
   const poll = useRef(null);
@@ -64,11 +66,6 @@ export function ScanPanel({ project, onIngested, embedded }) {
       setTools(info);
       if (info.options) {
         setProfile(info.options.default_profile);
-        const initial = {};
-        for (const [key, spec] of Object.entries(info.options.flags)) {
-          initial[key] = spec.default;
-        }
-        setFlags(initial);
       }
     }).catch((e) => setError(e.message));
 
@@ -117,7 +114,6 @@ export function ScanPanel({ project, onIngested, embedded }) {
         label: label || undefined,
         targets,
         profile,
-        flags,
         subfinder,
         authorised,
         rate_limit: Number(rateLimit),
@@ -276,26 +272,15 @@ export function ScanPanel({ project, onIngested, embedded }) {
 
       ${options && html`<div style="margin-top:12px">
         <button class="btn btn-sm" onClick=${() => setAdvanced(!advanced)}>
-          ${advanced ? '▾' : '▸'} What to collect
+          ${advanced ? '▾' : '▸'} Advanced
         </button>
         ${advanced && html`<div style="margin-top:8px">
           <p class="subtle" style="margin:0 0 8px">
-            Each of these turns on checks that are otherwise inert. More data means
-            a slower scan.
+            Every check runs on every scan — technology ID, TLS certificates,
+            favicons, JARM, ASN, response bodies, redirects — nothing here is
+            optional. The only thing left to tune is how fast it probes.
           </p>
-          ${(options.flag_order || Object.keys(options.flags)).map((key) => {
-            const spec = options.flags[key];
-            return html`
-            <label class="facet-row" style="width:auto;align-items:flex-start">
-              <input type="checkbox" checked=${Boolean(flags[key])}
-                onChange=${(e) => setFlags({ ...flags, [key]: e.target.checked })} />
-              <span>
-                <span class="label">${spec.label}</span>
-                <div class="subtle">${spec.note}</div>
-              </span>
-            </label>`;
-          })}
-          <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+          <div style="display:flex;gap:8px;align-items:center">
             <span class="subtle">Requests per second</span>
             <input class="input" type="number" style="width:90px"
               min=${options.limits.rate_limit[0]}
@@ -330,13 +315,32 @@ export function ScanPanel({ project, onIngested, embedded }) {
         </div>
       </div>
 
-      <div style="margin-top:10px">
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button class="btn btn-primary"
           disabled=${!authorised || !targets.trim() || !project}
           onClick=${start}>Start scan</button>
-        ${!project && html`<span class="subtle" style="margin-left:8px">
-          Choose a project first.</span>`}
+        <button class="btn"
+          disabled=${!targets.trim() || !project}
+          onClick=${() => { setShowSchedule(!showSchedule); setScheduled(false); }}>
+          Schedule scan</button>
+        ${!project && html`<span class="subtle">Choose a project first.</span>`}
       </div>
+
+      ${showSchedule && html`<div class="card" style="margin-top:10px">
+        <p class="subtle" style="margin:0 0 8px">
+          Runs this same target list on its own, on a cadence — nobody has to
+          remember to come back and click Start scan.
+        </p>
+        ${scheduled
+          ? html`<div class="banner" style="margin:0"><span>✓</span>
+              <div>Schedule saved. Manage it any time from
+                <strong>Configuration → Scans &amp; projects</strong>.</div></div>`
+          : html`<${ScheduleForm} project=${project}
+              initialTargets=${targets} initialProfile=${profile}
+              initialAuthorised=${authorised}
+              onCreated=${() => setScheduled(true)}
+              onCancel=${() => setShowSchedule(false)} />`}
+      </div>`}
     </div>`}
 
     ${busy && html`<${ScanProgress} job=${job}
@@ -443,6 +447,21 @@ function ScanOutcome({ job, onDismiss }) {
           <div class="subtle">▲ ${w}</div>`)}
         <div style="margin-top:8px">
           <button class="btn btn-sm" onClick=${onDismiss}>Run another</button>
+        </div>
+      </div></div>`;
+  }
+
+  if (job.state === 'empty') {
+    // Not a failure — the target genuinely had nothing to probe or nothing
+    // answered (dead domain, no subdomains, nothing live on the ports this
+    // profile checks). Same calm styling as the "Trends need two scans"
+    // empty states elsewhere, not the alarming red error banner.
+    return html`<div class="banner info" style="margin-bottom:0">
+      <span>○</span><div>
+        <strong>Nothing to scan.</strong>${' '}
+        ${job.error || ''}
+        <div style="margin-top:8px">
+          <button class="btn btn-sm" onClick=${onDismiss}>Try again</button>
         </div>
       </div></div>`;
   }

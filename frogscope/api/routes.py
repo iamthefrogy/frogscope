@@ -320,7 +320,7 @@ def scan_start():
         }
 
     def worker() -> None:
-        from ..scan import Cancelled, ScanError, ScanRun
+        from ..scan import Cancelled, EmptyResult, ScanError, ScanRun
         from ..scan.runner import NeedsApproval
 
         def publish(progress) -> None:
@@ -375,6 +375,13 @@ def scan_start():
             with _SCANS_LOCK:
                 _SCANS[job_id].update(state="cancelled",
                                       error="cancelled before it finished")
+        except EmptyResult as exc:
+            # Not a failure — the target genuinely had nothing to probe or
+            # nothing answered. A distinct state so the UI can say so calmly
+            # instead of showing the same red "scan failed" a crashed
+            # subprocess gets.
+            with _SCANS_LOCK:
+                _SCANS[job_id].update(state="empty", error=str(exc))
         except (ScanError, pipeline.IncompleteScan, pipeline.DuplicateRun) as exc:
             with _SCANS_LOCK:
                 _SCANS[job_id].update(state="error", error=str(exc))
@@ -509,14 +516,13 @@ def create_schedule_route(slug: str):
     if preset not in _PRESETS:
         return jsonify({"error": f"preset must be one of {_PRESETS}"}), 400
 
-    try:
-        max_hosts_cap = int(payload.get("max_hosts_cap", 500))
-    except (TypeError, ValueError):
-        return jsonify({"error": "max_hosts_cap must be a whole number"}), 400
-    if not 1 <= max_hosts_cap <= scan_options.MAX_HOSTS:
-        return jsonify({
-            "error": f"max_hosts_cap must be between 1 and {scan_options.MAX_HOSTS}",
-        }), 400
+    # No per-schedule approval cap — an unattended run auto-approves
+    # everything it finds, same as a manual scan does once past the
+    # awaiting-approval pause. `MAX_HOSTS` (options.py) is still the one
+    # real, unconditional stop against a genuinely runaway target list; it
+    # is not user-configurable and applies here exactly as it does to every
+    # other scan.
+    max_hosts_cap = scan_options.MAX_HOSTS
 
     # Validated the same way a manual scan is, so a bad target list is
     # rejected here — when a human is looking at the form — rather than
@@ -525,7 +531,6 @@ def create_schedule_route(slug: str):
         scan_options.parse({
             "targets": payload.get("targets") or [],
             "profile": payload.get("profile"),
-            "flags": payload.get("flags") or {},
             "authorised": True,
         })
     except OptionError as exc:
@@ -541,10 +546,11 @@ def create_schedule_route(slug: str):
         "target_kind": target_kind,
         "targets_json": json.dumps(targets),
         "profile": payload.get("profile") or scan_options.DEFAULT_PROFILE,
-        "flags_json": json.dumps(payload.get("flags") or {}),
-        # DNS/network/TLS analysis is unconditional now — nothing sends
-        # `correlate_steps` anymore. Column stays in the schema (harmless,
-        # unused) rather than a migration to drop it; see `scan/scheduler.py`.
+        # DNS/network/TLS analysis and every httpx collection flag are all
+        # unconditional now — nothing sends `flags`/`correlate_steps`
+        # anymore. Both columns stay in the schema (harmless, unused) rather
+        # than a migration to drop them; see `scan/scheduler.py`.
+        "flags_json": "{}",
         "correlate_json": "{}",
         "subfinder": payload.get("subfinder", True),
         "preset": preset,
@@ -581,8 +587,6 @@ def modify_schedule_route(schedule_id: int):
         fields["name"] = str(payload["name"]).strip()
     if "enabled" in payload:
         fields["enabled"] = int(bool(payload["enabled"]))
-    if "max_hosts_cap" in payload:
-        fields["max_hosts_cap"] = int(payload["max_hosts_cap"])
     if "preset" in payload or "time_of_day" in payload or "day_of_week" in payload:
         preset = payload.get("preset", existing["preset"])
         time_of_day = payload.get("time_of_day", existing["time_of_day"])

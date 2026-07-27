@@ -101,7 +101,7 @@ export function NetworkView({ run, project, onNavigate }) {
         <tbody>${(ips.rows || []).map((r) => html`<tr>
           <td><a href="#" onClick=${(e) => {
             e.preventDefault();
-            onNavigate('endpoints', { filters: { host_ip: [r.ip] } });
+            onNavigate('exec', { filters: { host_ip: [r.ip] } });
           }}><code>${r.ip}</code></a></td>
           <td>${r.cidr ? html`<code>${r.cidr}</code>` : '—'}</td>
           <td class="subtle" title=${(r.ptr || []).join(', ')}>

@@ -352,14 +352,11 @@ export function SetupView({ projects, project, onSelect, onCreated, onIngested,
     store.scanTools().then(setTools).catch(() => setTools({ ready: false }));
   }, []);
 
-  const manual = (tools && tools.options && tools.options.manual) || [];
-
   return html`<div class="view-scroll">
     <div class="setup-head">
-      <h1>Set up Frogscope</h1>
-      <p class="muted">Name what you are looking at, then get some data in.
-        Everything is stored on this machine, and the analysis never touches the
-        network.</p>
+      <h1>Get started</h1>
+      <p class="muted">Name what you are looking at, then scan it. Everything is
+        stored on this machine, and the analysis never touches the network.</p>
     </div>
 
     <div class="card" style="margin-bottom:16px">
@@ -369,39 +366,13 @@ export function SetupView({ projects, project, onSelect, onCreated, onIngested,
         autoFocus=${true} />
     </div>
 
-    <h2 class="setup-step2">Step 2 — get some data in${hasProject ? '' : ''}</h2>
+    <h2 class="setup-step2">Step 2 — scan it</h2>
     ${!hasProject && html`<p class="subtle" style="margin:0 0 12px">
       Name a project above first — a scan has to belong to something.</p>`}
 
     <div class="setup-options"
       style=${hasProject ? '' : 'opacity:0.45;pointer-events:none'}>
-
       <div class="card setup-option">
-        <div class="setup-option-head">
-          <span class="setup-option-tag">Option 1</span>
-          <strong>Upload a file you already have</strong>
-        </div>
-        <p class="subtle" style="margin:0 0 12px">
-          Nothing is installed and nothing is sent from here. Runs added on the
-          command line appear in the same place — it is one database.
-        </p>
-
-        <ol class="setup-guide">
-          ${manual.map((step) => html`<li>
-            <div class="setup-guide-step">${step.step}</div>
-            ${step.command && html`<pre class="setup-cmd"><code>${step.command}</code></pre>`}
-            <div class="subtle">${step.note}</div>
-          </li>`)}
-        </ol>
-
-        <${Uploader} project=${project} onIngested=${onIngested} />
-      </div>
-
-      <div class="card setup-option">
-        <div class="setup-option-head">
-          <span class="setup-option-tag">Option 2</span>
-          <strong>Let Frogscope scan for you</strong>
-        </div>
         ${tools && !tools.ready
           ? html`<div class="banner" style="margin-bottom:0"><span>▲</span><div>
               <strong>The scanners are not installed here.</strong>
@@ -409,8 +380,8 @@ export function SetupView({ projects, project, onSelect, onCreated, onIngested,
                 .map((t) => html`<div style="margin-top:6px">
                   <code>${t.name}</code> — ${t.purpose}<br/>
                   <span class="subtle">${t.install_hint}</span></div>`)}
-              <div style="margin-top:8px">The Docker image bundles both:${' '}
-                <code>docker compose up</code>. Until then, use Option 1.</div>
+              <div style="margin-top:8px">The Docker image bundles all of them:${' '}
+                <code>docker compose up</code>.</div>
             </div></div>`
           : html`<${ScanPanel} project=${project} onIngested=${onIngested}
               embedded=${true} />`}

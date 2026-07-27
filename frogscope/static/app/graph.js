@@ -38,8 +38,8 @@ export function RelationPanel({ kind, id, run, project, onNavigate }) {
 
   const jump = (edge) => {
     if (!onNavigate) return;
-    if (edge.kind === 'host') onNavigate('endpoints', { filters: { host: [edge.key] } });
-    else if (edge.kind === 'ip') onNavigate('endpoints', { filters: { host_ip: [edge.key] } });
+    if (edge.kind === 'host') onNavigate('exec', { filters: { host: [edge.key] } });
+    else if (edge.kind === 'ip') onNavigate('exec', { filters: { host_ip: [edge.key] } });
   };
 
   return html`<div>

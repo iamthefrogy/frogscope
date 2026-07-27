@@ -65,6 +65,17 @@ code, .mono { font-family: var(--font-mono); font-size: 12px; }
 .view { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 .view-scroll { flex: 1; overflow: auto; padding: 16px; }
 
+/* `EndpointsView` (`.view` → `.main` → Facets + `.grid-wrap`) was built to
+ * fill a full-height flex ancestor — the standalone tab it used to live in.
+ * Embedded inside a `.card` on the Summary page instead, `.card` has no
+ * height of its own, so `.view`'s `flex: 1` had nothing to size against and
+ * every child grew to its content height instead of scrolling internally:
+ * the pager (and its horizontal-scroll buttons) ended up hundreds of pixels
+ * below the fold, and the Facets sidebar scrolled with the whole page
+ * instead of on its own. This gives it back a real, bounded height so both
+ * regions scroll independently within it, same as the standalone tab did. */
+.embedded-table { height: min(70vh, 720px); display: flex; flex-direction: column; }
+
 /* ── Controls ─────────────────────────────────────────────────────────────── */
 
 button, select, input, textarea { font: inherit; color: inherit; }
@@ -168,6 +179,10 @@ button, select, input, textarea { font: inherit; color: inherit; }
   background: var(--color-bg); padding: 24px;
 }
 .auth-gate-card { width: 100%; max-width: 380px; }
+/* `.brand-text`/`.brand-sub` default to `white-space: nowrap` for the wide
+ * topbar, where the full-height brand block has room. The 380px auth card
+ * doesn't — the subtitle sentence ran past the card's edge. */
+.auth-gate-card .brand-text { white-space: normal; }
 
 .grid-cards {
   display: grid; gap: 12px;

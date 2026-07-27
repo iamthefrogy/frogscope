@@ -25,8 +25,8 @@ export const HELP = {
     title: 'Summary',
     body: [
       'The one page to read if you read nothing else. It answers: how big is our internet-facing estate, how much of it needs work, and is that getting better or worse.',
-      'Everything here counts HOSTS, not web addresses. One server can answer on a dozen ports and still be one thing to fix.',
-      'Print-friendly, so it can go straight into a board pack.',
+      'Everything above the table counts HOSTS, not web addresses — one server can answer on a dozen ports and still be one thing to fix. The table below it is every individual asset, worst risk score first, with quick-filter chips standing in for Network/Application/Certificates/On-Prem/Cloud.',
+      'Print-friendly, so the top half can go straight into a board pack.',
     ],
   },
   'section.fix': {
@@ -45,19 +45,12 @@ export const HELP = {
       'Assets that flicker in and out of every scan are separated out, so the headline numbers stay stable and you are not chasing noise.',
     ],
   },
-  'section.assets': {
-    title: 'Assets',
-    body: [
-      'The full inventory, filterable on every column. This is where you answer specific questions — "which production hosts have no firewall in front of them?"',
-      'Also holds the breakdowns: software in use, hosting and IP concentration, login pages, and possible dangling DNS records.',
-      'Press / anywhere in the app to jump to the search box.',
-    ],
-  },
   'section.data': {
-    title: 'Data & setup',
+    title: 'Configuration',
     body: [
-      'Upload scans, manage projects, delete data, and see exactly what the scan did and did not collect.',
+      'Run or schedule scans, manage projects, delete data, and see exactly what the scan did and did not collect.',
       'The coverage view is the honest part: it lists what could NOT be checked, so a clean result is never mistaken for a clean estate.',
+      'A CSV from your own machine can still be uploaded here, for anyone who already has httpx output rather than running a scan through the app.',
     ],
   },
 
@@ -259,9 +252,9 @@ export const HELP = {
     body: [
       'Finds subdomains of the domains you enter, probes each one, and files the result in this project — the same as uploading a file, without the round trip.',
       'Enter as many primary domains as the organisation owns, one per line. A large company usually has several — a main brand, country domains, an acquisition or two. Subdomains of all of them are found, merged into one list, and probed together, so the project holds the whole estate rather than a fragment of it.',
-      'This is the ONLY part of the tool that sends traffic. Everything else reads a file. Subdomain discovery is passive (public sources only); probing is not, so you are asked to confirm you are authorised, and asked again once the number of hosts is known.',
+      'This is the ONLY part of the tool that sends traffic. Everything else reads a file. Subdomain discovery is passive (public sources only); probing is not, so you are asked to confirm you are authorised before it starts.',
       'You pick from named options rather than typing scanner flags. That is deliberate: a free-text argument box would let anything typed here run as a command.',
-      'Each collection option turns on checks that are otherwise inert — certificate expiry needs certificates. More data means a slower scan.',
+      'Every check runs on every scan — technology ID, TLS certificates, favicons, JARM, ASN, response bodies, redirects. Nothing is behind a toggle; the only thing left to tune is how fast it probes (Advanced).',
     ],
   },
 
@@ -269,19 +262,11 @@ export const HELP = {
     title: 'Scheduled scans',
     body: [
       'Reruns this project\'s targets on its own — hourly, daily, or weekly — for an estate that keeps changing whether or not anyone is watching. Every scheduled run goes through the exact same path as clicking "Start scan" yourself, so a scheduled run and a manual one are indistinguishable once ingested.',
-      'The host cap is the unattended-approval policy: a manual scan pauses and asks once the host count is known, but there is nobody at 3am to click "approve". A run whose targets expand past the cap is skipped and logged instead of silently probing further than was agreed when the schedule was created.',
+      'An unattended run auto-approves everything it finds — the same pause a manual scan shows once the host count is known does not apply here, since there is nobody at 3am to click "approve". If a run genuinely can\'t find anything to probe, it is skipped and logged with the reason rather than treated as a failure.',
       'Authorisation is confirmed once, when the schedule is saved — it applies to every unattended run that schedule triggers afterward, not just the first one.',
     ],
   },
 
-  'runs.upload': {
-    title: 'Adding a scan',
-    body: [
-      'Drop in output from httpx (CSV, JSON, or JSONL). The same database backs the command line, so scans added either way appear in both.',
-      'Two safety checks: a scan that looks unfinished, and one that is a very different size from the last. Both can be accepted with one click, but they are not accepted silently — a truncated scan has fewer findings and would read as an improvement that never happened.',
-      'Re-uploading the same file is detected and skipped rather than counted twice.',
-    ],
-  },
   'runs.projects': {
     title: 'Projects',
     body: [

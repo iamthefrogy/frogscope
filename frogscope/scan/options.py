@@ -9,8 +9,10 @@ The alternative — "let the user type httpx flags" — would be command injecti
 with extra steps: `-o /etc/passwd`, `-H $(...)`, or simply `; rm -rf ~`. So the UI
 exposes choices, and the choices map to flags here.
 
-Adding a flag is a deliberate act: put it in `FLAGS` (or `PORT_PROFILES`) and it
-becomes selectable. Anything not listed cannot be reached.
+Every httpx behaviour flag in `HTTPX_FLAGS` runs unconditionally, same as every
+port in the chosen `PORT_PROFILES` entry — nothing here is user-selectable, so
+there is no "adding a flag" ceremony left: it's either in one of those two
+tuples/dicts or it never reaches argv at all.
 """
 
 from __future__ import annotations
@@ -108,54 +110,23 @@ PORT_PROFILES: dict[str, dict] = {
 DEFAULT_PROFILE = "common"
 
 
-# Selectable httpx behaviour. `flag` is what actually reaches argv.
+# httpx behaviour flags. Always on, every scan — no opt-in toggle, same
+# reasoning as DNS/network/TLS correlation above: there's no real cost
+# tradeoff here worth exposing as a checkbox (unlike naabu/tlsx's genuine
+# per-host network cost). `-jarm` and `-asn` used to default off; both are
+# unconditional now too. `-asn` needs a local offline database on first use,
+# so the very first scan on a fresh install may have a one-time delay while
+# that downloads — expected, not a bug.
 #
-# `-screenshot` is deliberately absent. It needs a headless browser that the image
-# does not ship, and httpx exits 1 when it cannot find one — losing the whole scan,
-# enumeration included, for a flag whose output the analysis does not yet consume.
-# An option that reliably breaks the run is worse than no option.
-#
-# Ordered most useful first. The form renders them in this order, and an
-# alphabetical list put the two least useful flags at the top.
-FLAGS: dict[str, dict] = {
-    "tech_detect": {
-        "flag": ["-tech-detect"], "default": True,
-        "label": "Identify technologies",
-        "note": "Needed for end-of-life and outdated-component findings.",
-    },
-    "tls_grab": {
-        "flag": ["-tls-grab"], "default": True,
-        "label": "Read TLS certificates",
-        "note": "Unlocks the certificate-expiry and legacy-TLS rules, which are "
-                "otherwise inert.",
-    },
-    "favicon": {
-        "flag": ["-favicon"], "default": True,
-        "label": "Hash favicons",
-        "note": "Often the only way to identify a product behind a login page.",
-    },
-    "body_preview": {
-        "flag": ["-body-preview"], "default": True,
-        "label": "Capture a little response body",
-        "note": "Unlocks takeover fingerprints and credential-in-response checks.",
-    },
-    "follow_redirects": {
-        "flag": ["-follow-redirects"], "default": True,
-        "label": "Follow redirects",
-        "note": "Reveals where a host actually sends you — needed to spot "
-                "federated logins and off-site redirects.",
-    },
-    "jarm": {
-        "flag": ["-jarm"], "default": False,
-        "label": "JARM TLS fingerprint",
-        "note": "Slower: it makes several extra TLS handshakes per host.",
-    },
-    "asn": {
-        "flag": ["-asn"], "default": False,
-        "label": "Look up ASN",
-        "note": "Adds the owning network. Needs an offline database on first use.",
-    },
-}
+# `-screenshot` is still deliberately absent. It needs a headless browser
+# that the image does not ship, and httpx exits 1 when it cannot find one —
+# losing the whole scan, enumeration included, for output the analysis
+# doesn't consume yet. An option that reliably breaks the run is worse than
+# no option.
+HTTPX_FLAGS: tuple[str, ...] = (
+    "-tech-detect", "-tls-grab", "-favicon", "-body-preview",
+    "-follow-redirects", "-jarm", "-asn",
+)
 
 
 # DNS/network analysis (dnsx resolve+reverse, mapcidr aggregate) and TLS
@@ -249,7 +220,6 @@ class ScanOptions:
     # answer.
     target_kind: str = "domain"
     profile: str = DEFAULT_PROFILE
-    flags: dict[str, bool] = field(default_factory=dict)
     rate_limit: int = 150
     threads: int = 50
     timeout: int = 10
@@ -266,7 +236,7 @@ class ScanOptions:
         return {
             "domains": self.domains, "ips": self.ips, "cidrs": self.cidrs,
             "target_kind": self.target_kind, "profile": self.profile,
-            "flags": self.flags, "rate_limit": self.rate_limit,
+            "rate_limit": self.rate_limit,
             "threads": self.threads, "timeout": self.timeout,
             "retries": self.retries, "subfinder": self.subfinder,
             "authorised": self.authorised,
@@ -322,17 +292,6 @@ def parse(payload: dict) -> ScanOptions:
     if profile not in PORT_PROFILES:
         raise OptionError(f"unknown port profile {profile!r}")
 
-    requested = payload.get("flags") or {}
-    if not isinstance(requested, dict):
-        raise OptionError("flags must be an object")
-    flags = {name: bool(requested.get(name, spec["default"]))
-             for name, spec in FLAGS.items()}
-    unknown = set(requested) - set(FLAGS)
-    if unknown:
-        # Refused rather than ignored: silently dropping a flag somebody thought
-        # they had enabled would make the coverage report wrong.
-        raise OptionError(f"unknown option(s): {', '.join(sorted(unknown))}")
-
     def bounded(key: str, default: int, low: int, high: int) -> int:
         try:
             value = int(payload.get(key, default))
@@ -348,7 +307,6 @@ def parse(payload: dict) -> ScanOptions:
         cidrs=cidrs,
         target_kind=target_kind,
         profile=profile,
-        flags=flags,
         rate_limit=bounded("rate_limit", 150, 1, 1000),
         threads=bounded("threads", 50, 1, 300),
         timeout=bounded("timeout", 10, 1, 60),
@@ -411,9 +369,7 @@ def httpx_argv(binary: str, options: ScanOptions, *, input_path: str,
         "-no-color",
         "-silent",
     ]
-    for name, enabled in options.flags.items():
-        if enabled:
-            argv.extend(FLAGS[name]["flag"])
+    argv.extend(HTTPX_FLAGS)
     return argv
 
 
@@ -524,9 +480,7 @@ def manual_commands(profile: str = DEFAULT_PROFILE) -> list[dict]:
     actually runs — a copied command that produces a CSV missing `-body-preview`
     silently disables a set of checks.
     """
-    defaults = ScanOptions(
-        domains=["example.com"], profile=profile,
-        flags={name: spec["default"] for name, spec in FLAGS.items()})
+    defaults = ScanOptions(domains=["example.com"], profile=profile)
     httpx = httpx_argv("httpx", defaults, input_path="hosts.txt",
                        output_path="scan.csv")
     return [
@@ -563,15 +517,8 @@ def catalogue() -> dict:
         },
         "default_profile": DEFAULT_PROFILE,
         "target_kinds": list(TARGET_KINDS),
-        # Definition order, which is deliberate: most useful first.
-        "flag_order": list(FLAGS),
         # The equivalent commands, for anyone who would rather run it themselves.
         "manual": manual_commands(),
-        "flags": {
-            key: {"label": spec["label"], "note": spec["note"],
-                  "default": spec["default"]}
-            for key, spec in FLAGS.items()
-        },
         "limits": {
             "max_domains": MAX_DOMAINS,
             "max_ips": MAX_IPS,

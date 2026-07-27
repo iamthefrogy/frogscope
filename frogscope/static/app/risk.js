@@ -333,7 +333,7 @@ export function FindingsView({ project, onNavigate }) {
                 ${group.findings.map((f) => html`<tr>
                   <td><a href="#" onClick=${(e) => {
                     e.preventDefault();
-                    onNavigate('endpoints', { filters: { host: [f.asset_key] } });
+                    onNavigate('exec', { filters: { host: [f.asset_key] } });
                   }}>${f.asset_key}</a></td>
                   <td class="num right">${f.detail.endpoint_count || 0}</td>
                   <td class="num right">${f.detail.max_score || 0}</td>

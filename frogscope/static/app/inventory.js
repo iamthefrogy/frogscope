@@ -132,7 +132,7 @@ export function TakeoverView({ run, project, onNavigate }) {
                 Copy commands</button>
               <button class="btn btn-sm" style="margin-top:6px"
                 onClick=${(e) => { e.stopPropagation();
-                  onNavigate('endpoints', { filters: { host: [c.host] } }); }}>
+                  onNavigate('exec', { filters: { host: [c.host] } }); }}>
                 Open in the grid</button>
             </div>
           </div>`}
@@ -327,7 +327,7 @@ export function InfraView({ run, project, onNavigate }) {
         <tbody>${data.port_rows.map((p) => html`<tr>
           <td class="num right"><a href="#" onClick=${(e) => {
             e.preventDefault();
-            onNavigate('endpoints', { filters: { port: [String(p.port)] } });
+            onNavigate('exec', { filters: { port: [String(p.port)] } });
           }}>${p.port}</a></td>
           <td class="num right">${num(p.total)}</td>
           <td class="num right" style=${p.real
@@ -367,7 +367,7 @@ export function InfraView({ run, project, onNavigate }) {
             ${grid.slice(0, gridLimit).map((row) => html`<tr>
               <td class="mono"><a href="#" onClick=${(e) => {
                 e.preventDefault();
-                onNavigate('endpoints', { filters: { host: [row.host] } });
+                onNavigate('exec', { filters: { host: [row.host] } });
               }}>${truncate(row.host_display || row.host, 34)}</a></td>
               ${data.ports.map((port) => {
                 const cell = row.cells[String(port)];
@@ -516,7 +516,7 @@ export function AuthView({ run, project, onNavigate }) {
               <tbody>${g.endpoints.slice(0, 60).map((e) => html`<tr>
                 <td class="mono"><a href="#" onClick=${(ev) => {
                   ev.preventDefault();
-                  onNavigate('endpoints', { filters: { host: [e.host] } });
+                  onNavigate('exec', { filters: { host: [e.host] } });
                 }}>${e.endpoint_key}</a></td>
                 <td>${e.risk_band
                   ? html`<${SeverityChip} severity=${e.risk_band} />` : '—'}</td>

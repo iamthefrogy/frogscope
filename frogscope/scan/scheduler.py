@@ -28,7 +28,7 @@ from ..config import Config
 from ..db.connection import connect
 from . import executor
 from . import options as opts
-from .runner import Cancelled, NeedsApproval, ScanError, ScanRun
+from .runner import Cancelled, EmptyResult, NeedsApproval, ScanError, ScanRun
 
 # One check a minute is frequent enough that "daily at 03:00" fires within a
 # minute of meaning it, and cheap enough that it costs nothing between ticks.
@@ -136,16 +136,15 @@ class Scheduler:
 
         try:
             targets = json.loads(schedule["targets_json"] or "[]")
-            flags = json.loads(schedule["flags_json"] or "{}")
-            # `schedule["correlate_json"]` is no longer read: DNS/network
-            # analysis and TLS certificate reading both run unconditionally
-            # now, so there is nothing left for a per-schedule correlate
-            # setting to gate. The column stays in the schema (harmless,
-            # unused) rather than a migration to drop it.
+            # `schedule["correlate_json"]`/`schedule["flags_json"]` are no
+            # longer read: DNS/network analysis, TLS certificate reading, and
+            # every httpx collection flag all run unconditionally now, so
+            # there is nothing left for either per-schedule setting to gate.
+            # Both columns stay in the schema (harmless, unused) rather than
+            # a migration to drop them.
             payload = {
                 "targets": targets,
                 "profile": schedule["profile"],
-                "flags": flags,
                 "subfinder": bool(schedule["subfinder"]),
                 "authorised": True,
                 # The unattended-approval policy: proceed automatically up to
@@ -169,7 +168,7 @@ class Scheduler:
                     f"{schedule['max_hosts_cap']}-host cap — run skipped rather "
                     f"than probing more than was agreed"))
             return
-        except (ScanError, Cancelled) as exc:
+        except (ScanError, EmptyResult, Cancelled) as exc:
             self._record(conn, schedule["id"], nxt, skip_reason=str(exc))
             return
 

@@ -7,8 +7,8 @@ same path.
 """
 
 from .options import OptionError, ScanOptions, catalogue, parse
-from .runner import Cancelled, ScanError, ScanRun
+from .runner import Cancelled, EmptyResult, ScanError, ScanRun
 from .tools import inventory, missing
 
 __all__ = ["OptionError", "ScanOptions", "catalogue", "parse",
-           "Cancelled", "ScanError", "ScanRun", "inventory", "missing"]
+           "Cancelled", "EmptyResult", "ScanError", "ScanRun", "inventory", "missing"]
