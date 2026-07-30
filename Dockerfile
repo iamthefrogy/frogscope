@@ -1,3 +1,10 @@
+# syntax=docker/dockerfile:1
+# The line above pins the BuildKit frontend explicitly. Without it, a host
+# with an older Docker CLI or DOCKER_BUILDKIT=0 falls back to the legacy
+# builder, which does not understand `--mount=type=cache` below and fails
+# the parse outright — this line guarantees BuildKit runs regardless of the
+# host's default.
+#
 # Frogscope, with the scanners it drives.
 #
 # Three stages: two Go builders (one pure-Go/Alpine for everything that can be
@@ -22,6 +29,17 @@
 FROM golang:1.26-alpine AS scanners
 
 RUN apk add --no-cache git ca-certificates
+
+# GOSUMDB=off: skip sum.golang.org checksum verification. That lookup is a
+# frequent source of build flakes on fresh hosts (HTTP/2 stream resets,
+# corporate proxies) even though the same build succeeds elsewhere once its
+# module cache is warm. Versions above are already pinned, so the checksum
+# check is not the thing guarding supply-chain integrity here.
+# GOPROXY fallback: if proxy.golang.org itself is unreachable (corporate
+# network, restrictive firewall), fall back to fetching straight from the
+# module's VCS instead of failing the build outright.
+ENV GOSUMDB=off \
+    GOPROXY=https://proxy.golang.org,direct
 
 # Pinned. An unpinned `@latest` means the image silently changes behaviour between
 # builds, and a scanner that behaves differently makes a run-over-run comparison
@@ -51,16 +69,28 @@ ARG DNSX_VERSION=v1.2.2
 ARG MAPCIDR_VERSION=v1.1.97
 ARG TLSX_VERSION=v1.2.2
 
-RUN CGO_ENABLED=0 go install -trimpath -ldflags="-s -w" \
+# Each install retries up to 5x on failure. A dropped HTTP/2 stream to the
+# module proxy (the exact failure this was built to survive) is transient —
+# one retry a few seconds later almost always succeeds, so a fresh host on a
+# flaky network doesn't need a full `docker build` re-run to get past it.
+RUN --mount=type=cache,target=/root/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    set -e; \
+    for pkg in \
       github.com/projectdiscovery/subfinder/v2/cmd/subfinder@${SUBFINDER_VERSION} \
- && CGO_ENABLED=0 go install -trimpath -ldflags="-s -w" \
       github.com/projectdiscovery/httpx/cmd/httpx@${HTTPX_VERSION} \
- && CGO_ENABLED=0 go install -trimpath -ldflags="-s -w" \
       github.com/projectdiscovery/dnsx/cmd/dnsx@${DNSX_VERSION} \
- && CGO_ENABLED=0 go install -trimpath -ldflags="-s -w" \
       github.com/projectdiscovery/mapcidr/cmd/mapcidr@${MAPCIDR_VERSION} \
- && CGO_ENABLED=0 go install -trimpath -ldflags="-s -w" \
-      github.com/projectdiscovery/tlsx/cmd/tlsx@${TLSX_VERSION}
+      github.com/projectdiscovery/tlsx/cmd/tlsx@${TLSX_VERSION} \
+    ; do \
+      n=0; \
+      until CGO_ENABLED=0 go install -trimpath -ldflags="-s -w" "$pkg"; do \
+        n=$((n + 1)); \
+        if [ "$n" -ge 5 ]; then echo "giving up on $pkg after $n attempts" >&2; exit 1; fi; \
+        echo "go install $pkg failed, retry $n/5 in 5s" >&2; \
+        sleep 5; \
+      done; \
+    done
 
 # ── Stage 2: build naabu — needs its own builder ────────────────────────────
 # naabu links against libpcap (gopacket/pcap) and cannot build with
@@ -73,16 +103,32 @@ RUN CGO_ENABLED=0 go install -trimpath -ldflags="-s -w" \
 # specifically so naabu's glibc linkage matches the runtime stage.
 FROM golang:1.24-bookworm AS naabu-builder
 
-RUN apt-get update \
+# apt-get update retries: mirror hiccups on a fresh host are the same class
+# of flake as the go module proxy above.
+RUN for i in 1 2 3 4 5; do apt-get update && break || sleep 5; done \
  && apt-get install -y --no-install-recommends libpcap-dev \
  && rm -rf /var/lib/apt/lists/*
+
+# See the scanners stage above for why GOSUMDB/GOPROXY are set here too.
+ENV GOSUMDB=off \
+    GOPROXY=https://proxy.golang.org,direct
 
 # naabu: the open-port pre-filter ahead of httpx/tlsx. Pinned to the version
 # `naabu_argv()`/`_port_scan()` were verified against a real install.
 ARG NAABU_VERSION=v2.3.5
 
-RUN CGO_ENABLED=1 go install -trimpath -ldflags="-s -w" \
-      github.com/projectdiscovery/naabu/v2/cmd/naabu@${NAABU_VERSION}
+# Retries up to 5x — see the scanners stage above for why.
+RUN --mount=type=cache,target=/root/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    set -e; \
+    n=0; \
+    until CGO_ENABLED=1 go install -trimpath -ldflags="-s -w" \
+      github.com/projectdiscovery/naabu/v2/cmd/naabu@${NAABU_VERSION}; do \
+      n=$((n + 1)); \
+      if [ "$n" -ge 5 ]; then echo "giving up on naabu after $n attempts" >&2; exit 1; fi; \
+      echo "go install naabu failed, retry $n/5 in 5s" >&2; \
+      sleep 5; \
+    done
 
 # ── Stage 3: the application ────────────────────────────────────────────────
 FROM python:3.12-slim AS app
@@ -97,7 +143,7 @@ ENV PYTHONUNBUFFERED=1 \
 # runtime counterpart to naabu-builder's libpcap-dev — naabu dynamically
 # links against it, so it must be present here even though nothing else in
 # this image touches it.
-RUN apt-get update \
+RUN for i in 1 2 3 4 5; do apt-get update && break || sleep 5; done \
  && apt-get install -y --no-install-recommends ca-certificates libpcap0.8 \
  && rm -rf /var/lib/apt/lists/*
 

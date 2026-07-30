@@ -624,15 +624,18 @@ def test_deleting_a_project_flushes_every_table_that_referenced_it(db, cfg):
             assert left == 0, f"{table} kept {left} orphaned row(s)"
 
 
-# ── The first-run screen offers both routes ──────────────────────────────────
+# ── The first-run screen offers scanning only, no manual upload ─────────────
 
-def test_setup_offers_both_upload_and_scan():
-    """It used to offer only upload, which is why it had to explain how to produce a
-    file by hand. Both routes are now presented as equal options."""
+def test_setup_offers_only_the_scan_path():
+    """Docker scanning is the primary, lightweight path — there is no reason
+    to offer a second, manual-upload route on first run, or anywhere else in
+    the UI. `Uploader` stays defined (unreferenced) rather than deleted, same
+    precedent as other components retired from the nav but left in place."""
     source = Path("frogscope/static/app/manage.js").read_text(encoding="utf-8")
-    assert "Option 1" in source and "Option 2" in source
+    assert "Option 1" not in source and "Option 2" not in source
     assert "ScanPanel" in source
-    assert "Uploader" in source
+    setup = source[source.index("export function SetupView"):]
+    assert "Uploader" not in setup
 
 
 def test_the_old_produce_one_with_httpx_card_is_gone():
@@ -640,11 +643,12 @@ def test_the_old_produce_one_with_httpx_card_is_gone():
     assert "No scan yet?" not in source
 
 
-def test_the_setup_guide_is_rendered_from_the_server_not_hardcoded():
-    """A command pasted into the markup would drift from what the scanner runs."""
-    source = Path("frogscope/static/app/manage.js").read_text(encoding="utf-8")
-    assert "tools.options.manual" in source
-    assert "httpx -list" not in source, "the command must not be hardcoded in the UI"
+def test_manual_upload_is_not_offered_anywhere_in_the_ui():
+    """The only remaining upload path is `frogscope ingest` on the CLI —
+    dropped from Configuration (views.js's `RunsView`) the same way it was
+    dropped from Setup."""
+    source = Path("frogscope/static/app/views.js").read_text(encoding="utf-8")
+    assert "Uploader" not in source
 
 
 def test_setup_keeps_project_creation_and_deletion_available():

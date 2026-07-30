@@ -250,9 +250,10 @@ def test_the_blocked_list_names_the_flag_that_unlocks_each_gap():
 
 
 def test_the_refresh_procedure_is_written_down():
-    """The procedure lives in the README rather than a separate file, so there is
-    one document to keep current instead of two that can disagree."""
-    doc = Path("README.md")
+    """The procedure lives in MAINTENANCE.md — README.md is the install-and-use
+    doc, this is the maintainer-only rest, kept as one document rather than
+    scattered across comments so a review never starts from scratch."""
+    doc = Path("MAINTENANCE.md")
     assert doc.exists()
     text = doc.read_text(encoding="utf-8")
     # The parts that make it repeatable rather than a vague intention.
