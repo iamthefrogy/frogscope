@@ -681,6 +681,17 @@ def list_schedules(conn: sqlite3.Connection, project_id: int) -> list[sqlite3.Ro
     ).fetchall()
 
 
+def list_all_schedules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every schedule across every project, for collision-checking a new
+    schedule's time slot and for the cross-project "Schedules" summary —
+    both need the whole estate, not one project's slice of it."""
+    return conn.execute(
+        "SELECT s.*, p.slug AS project_slug, p.name AS project_name "
+        "FROM schedules s JOIN projects p ON p.id = s.project_id "
+        "ORDER BY p.name, s.name",
+    ).fetchall()
+
+
 def get_schedule(conn: sqlite3.Connection, schedule_id: int) -> sqlite3.Row | None:
     return conn.execute(
         "SELECT * FROM schedules WHERE id = ?", (schedule_id,)

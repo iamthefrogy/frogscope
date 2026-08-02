@@ -475,6 +475,18 @@ def _schedule_row_to_dict(row) -> dict:
     return out
 
 
+@api.get("/schedules")
+def list_all_schedules_route():
+    """Every schedule across every project — backs both the "Schedules"
+    summary tab and the new-schedule form's collision check, neither of
+    which cares about one project at a time."""
+    from ..ingest.store import list_all_schedules
+
+    conn = get_db()
+    rows = list_all_schedules(conn)
+    return jsonify({"schedules": [_schedule_row_to_dict(r) for r in rows]})
+
+
 @api.get("/projects/<slug>/schedules")
 def list_schedules_route(slug: str):
     from ..ingest.store import list_schedules

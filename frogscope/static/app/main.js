@@ -14,6 +14,7 @@ import { TechnologyView } from './inventory.js';
 import { SetupView } from './manage.js';
 import { Help } from './help.js';
 import { DiscoveredView } from './discovered.js';
+import { ScheduleSummaryView } from './schedule.js';
 
 const html = htm.bind(h);
 
@@ -54,6 +55,11 @@ const SECTIONS = [
     help: 'section.data',
     tabs: [['runs', 'Scans & projects'], ['coverage', 'What was collected'],
            ['methodology', 'How scoring works']],
+  },
+  {
+    id: 'schedules', label: 'Schedules',
+    help: 'section.schedules',
+    tabs: [['schedule-summary', 'All schedules']],
   },
 ];
 
@@ -184,7 +190,7 @@ function App() {
   }
 
   let body;
-  if (!hasRuns && tab !== 'runs') {
+  if (!hasRuns && tab !== 'runs' && tab !== 'schedule-summary') {
     body = html`<div class="view-scroll"><div class="empty">
       <h2>Nothing in this project yet</h2>
       <p class="muted">Other projects have scans, but
@@ -214,6 +220,8 @@ function App() {
     body = html`<${RunsView} projects=${projects} project=${project}
       onSelect=${setProject} onProjectsChanged=${reload}
       onIngested=${reload} />`;
+  } else if (tab === 'schedule-summary') {
+    body = html`<${ScheduleSummaryView} />`;
   } else if (tab === 'overview') {
     body = html`<${OverviewView} run=${run} project=${project} onNavigate=${navigate} />`;
   } else {

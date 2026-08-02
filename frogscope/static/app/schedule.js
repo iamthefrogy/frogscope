@@ -22,6 +22,68 @@ const PRESETS = [
 ];
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
+// ── Collision-aware scheduling ───────────────────────────────────────────
+//
+// Two schedules "collide" when they'd both fire at the same time, piling
+// unattended scan traffic onto the same minute instead of spreading it out.
+// A daily schedule occupies its time on every day of the week; a weekly one
+// occupies just its one day — so a candidate has to be checked against both.
+// Hourly schedules are a separate domain (only the minute-of-hour repeats),
+// so they're only checked against each other.
+const pad2 = (n) => String(n).padStart(2, '0');
+
+// Quiet hours first (01:00-05:30), so a fresh recommendation naturally lands
+// off-peak; the rest of the day is the fallback once those run out.
+const QUIET_TIMES = [];
+for (let h = 1; h <= 5; h++) for (const m of [0, 30]) QUIET_TIMES.push(`${pad2(h)}:${pad2(m)}`);
+const ALL_TIMES = [];
+for (let h = 0; h < 24; h++) for (const m of [0, 30]) ALL_TIMES.push(`${pad2(h)}:${pad2(m)}`);
+const TIME_CANDIDATES = [...QUIET_TIMES, ...ALL_TIMES.filter((t) => !QUIET_TIMES.includes(t))];
+
+function occupiedAt(schedules, time) {
+  let allDays = false;
+  const days = new Set();
+  for (const s of schedules) {
+    if (!s.enabled || s.time_of_day !== time) continue;
+    if (s.preset === 'daily') allDays = true;
+    else if (s.preset === 'weekly') days.add(s.day_of_week ?? 0);
+  }
+  return { allDays, days };
+}
+
+/** First non-colliding daily time, or the first quiet-hours time if every
+ * candidate is already taken (better to still suggest something than none). */
+function suggestDailyTime(schedules) {
+  for (const t of TIME_CANDIDATES) {
+    const occ = occupiedAt(schedules, t);
+    if (!occ.allDays && occ.days.size === 0) return { time: t, clashFree: true };
+  }
+  return { time: QUIET_TIMES[0], clashFree: false };
+}
+
+/** First non-colliding (day, time) pair for a weekly schedule, trying the
+ * caller's preferred day first before spreading to the rest of the week. */
+function suggestWeeklySlot(schedules, preferredDay) {
+  const order = [preferredDay, ...WEEKDAYS.map((_, i) => i).filter((i) => i !== preferredDay)];
+  for (const day of order) {
+    for (const t of TIME_CANDIDATES) {
+      const occ = occupiedAt(schedules, t);
+      if (!occ.allDays && !occ.days.has(day)) return { day, time: t, clashFree: true };
+    }
+  }
+  return { day: preferredDay, time: QUIET_TIMES[0], clashFree: false };
+}
+
+/** First unused top-of-hour minute for an hourly schedule. */
+function suggestHourlyMinute(schedules) {
+  const used = new Set(schedules
+    .filter((s) => s.enabled && s.preset === 'hourly')
+    .map((s) => parseInt((s.time_of_day || '00:00').split(':')[1], 10)));
+  const candidates = [0, 15, 30, 45, 5, 10, 20, 25, 35, 40, 50, 55];
+  for (const m of candidates) if (!used.has(m)) return { time: `00:${pad2(m)}`, clashFree: true };
+  return { time: '00:00', clashFree: false };
+}
+
 export function SchedulePanel({ project }) {
   const [schedules, setSchedules] = useState(null);
   const [error, setError] = useState('');
@@ -70,6 +132,13 @@ export function SchedulePanel({ project }) {
   </div>`;
 }
 
+function cadenceText(s) {
+  return s.preset === 'weekly'
+    ? `Weekly, ${WEEKDAYS[s.day_of_week ?? 0]} ${s.time_of_day || ''}`
+    : s.preset === 'hourly' ? 'Hourly'
+    : `Daily, ${s.time_of_day || ''}`;
+}
+
 function ScheduleRow({ schedule: s, onChanged }) {
   const [busy, setBusy] = useState(false);
 
@@ -90,10 +159,7 @@ function ScheduleRow({ schedule: s, onChanged }) {
     finally { setBusy(false); }
   };
 
-  const cadence = s.preset === 'weekly'
-    ? `Weekly, ${WEEKDAYS[s.day_of_week ?? 0]} ${s.time_of_day || ''}`
-    : s.preset === 'hourly' ? 'Hourly'
-    : `Daily, ${s.time_of_day || ''}`;
+  const cadence = cadenceText(s);
 
   return html`<tr>
     <td>
@@ -133,6 +199,54 @@ export function ScheduleForm({ project, onCreated, onCancel,
   const [authorised, setAuthorised] = useState(Boolean(initialAuthorised));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  // Every schedule across every project, fetched once — used to recommend a
+  // day/time that doesn't collide with anything already scheduled. Manually
+  // editing time or day marks that field "touched" so the recommendation
+  // stops overwriting a deliberate choice.
+  const [allSchedules, setAllSchedules] = useState(null);
+  const [suggestion, setSuggestion] = useState(null);
+  const [timeTouched, setTimeTouched] = useState(false);
+  const [dayTouched, setDayTouched] = useState(false);
+
+  useEffect(() => {
+    store.allSchedules().then(setAllSchedules).catch(() => setAllSchedules([]));
+  }, []);
+
+  useEffect(() => {
+    if (!allSchedules) return;
+    let next;
+    if (preset === 'hourly') next = suggestHourlyMinute(allSchedules);
+    else if (preset === 'weekly') next = suggestWeeklySlot(allSchedules, Number(dayOfWeek));
+    else next = suggestDailyTime(allSchedules);
+    setSuggestion(next);
+    if (!timeTouched) setTimeOfDay(next.time);
+    if (preset === 'weekly' && !dayTouched && next.day !== undefined) setDayOfWeek(next.day);
+    // Re-suggest whenever the cadence changes, or once schedules arrive —
+    // deliberately not reacting to `dayOfWeek`/`timeOfDay` themselves, or a
+    // user's own edit would immediately get recomputed out from under them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset, allSchedules]);
+
+  // A user picking a different day (weekly only) should re-suggest the time
+  // for *that* day, without touching the day they just chose themselves.
+  useEffect(() => {
+    if (!allSchedules || preset !== 'weekly' || !dayTouched) return;
+    const next = suggestWeeklySlot(allSchedules, Number(dayOfWeek));
+    setSuggestion(next);
+    if (!timeTouched) setTimeOfDay(next.time);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dayOfWeek]);
+
+  const applySuggestion = () => {
+    if (!suggestion) return;
+    setTimeOfDay(suggestion.time);
+    setTimeTouched(false);
+    if (preset === 'weekly' && suggestion.day !== undefined) {
+      setDayOfWeek(suggestion.day);
+      setDayTouched(false);
+    }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -177,12 +291,25 @@ export function ScheduleForm({ project, onCreated, onCancel,
         ${PRESETS.map(([v, label]) => html`<option value=${v}>${label}</option>`)}
       </select>
       ${preset !== 'hourly' ? html`<input class="input" type="time" style="width:110px"
-        value=${timeOfDay} onInput=${(e) => setTimeOfDay(e.target.value)} />` : null}
+        value=${timeOfDay}
+        onInput=${(e) => { setTimeOfDay(e.target.value); setTimeTouched(true); }} />` : null}
       ${preset === 'weekly' ? html`<select class="input" value=${dayOfWeek}
-        onChange=${(e) => setDayOfWeek(e.target.value)}>
+        onChange=${(e) => { setDayOfWeek(e.target.value); setDayTouched(true); }}>
         ${WEEKDAYS.map((d, i) => html`<option value=${i}>${d}</option>`)}
       </select>` : null}
     </div>
+
+    ${suggestion ? html`<p class="subtle" style="margin:0">
+      ${suggestion.clashFree
+        ? html`Recommended slot, clear of every other schedule: <strong>${
+            preset === 'weekly' ? `${WEEKDAYS[suggestion.day]} ` : ''}${suggestion.time}</strong>.`
+        : html`Every quiet slot is already taken — closest pick: <strong>${
+            preset === 'weekly' ? `${WEEKDAYS[suggestion.day]} ` : ''}${suggestion.time}</strong>,
+            still overlaps something.`}
+      ${(timeTouched || dayTouched)
+        ? html` <button class="btn btn-sm" type="button" onClick=${applySuggestion}>Use this</button>`
+        : null}
+    </p>` : null}
 
     <label class="facet-row">
       <input type="checkbox" checked=${authorised}
@@ -199,4 +326,54 @@ export function ScheduleForm({ project, onCreated, onCancel,
       <button class="btn" type="button" onClick=${onCancel}>Cancel</button>
     </div>
   </form>`;
+}
+
+// One table, every project's schedules together — the question this answers
+// is "what's running when, across the whole estate", which per-project
+// `SchedulePanel` can't show since it only ever sees one project at a time.
+export function ScheduleSummaryView() {
+  const [schedules, setSchedules] = useState(null);
+  const [error, setError] = useState('');
+
+  const refresh = () => {
+    store.allSchedules().then(setSchedules).catch((e) => setError(e.message));
+  };
+  useEffect(() => { refresh(); }, []);
+
+  if (SNAP) return html`<div class="view-scroll"><div class="empty">
+    <p class="muted">Not available in the offline export.</p>
+  </div></div>`;
+
+  return html`<div class="view-scroll"><div class="card">
+    <${CardTitle} topic="section.schedules">All schedules<//>
+    <p class="subtle" style="margin:0 0 10px">
+      Every scheduled scan, across every project, in one place — so two
+      schedules never end up quietly clashing on the same time slot.
+    </p>
+
+    ${error ? html`<div class="banner error" style="margin-bottom:10px">${error}</div>` : null}
+    ${!schedules ? html`<div class="loading">Loading…</div>` : null}
+
+    ${schedules && schedules.length ? html`<div class="scroll-x">
+      <table class="plain">
+        <thead><tr>
+          <th>Project</th><th>Schedule</th><th>Cadence</th><th>Last run</th>
+        </tr></thead>
+        <tbody>${schedules.map((s) => html`<tr>
+          <td>${s.project_name}</td>
+          <td>
+            <strong>${s.name}</strong>
+            ${!s.enabled ? html`<span class="chip" data-state="neutral" style="margin-left:6px">paused</span>` : null}
+          </td>
+          <td>${cadenceText(s)}</td>
+          <td class="subtle nowrap">
+            ${s.last_run_at ? when(s.last_run_at) : 'never'}
+            ${s.last_skip_reason ? html`<div><span class="chip" data-state="warn" title=${s.last_skip_reason}>skipped</span></div>` : null}
+          </td>
+        </tr>`)}</tbody>
+      </table>
+    </div>` : null}
+    ${schedules && !schedules.length
+      ? html`<p class="subtle">No schedules yet — add one from a project's "Scans & projects" tab.</p>` : null}
+  </div></div>`;
 }

@@ -331,6 +331,13 @@ export const store = {
     return (await jget(`/api/projects/${encodeURIComponent(project)}/schedules`)).schedules;
   },
 
+  // Every schedule, across every project — the collision check and the
+  // "Schedules" summary tab both need the whole estate.
+  async allSchedules() {
+    if (SNAP) return [];
+    return (await jget('/api/schedules')).schedules;
+  },
+
   async createSchedule(project, body) {
     return jpost(`/api/projects/${encodeURIComponent(project)}/schedules`, body);
   },

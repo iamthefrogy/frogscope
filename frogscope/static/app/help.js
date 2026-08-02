@@ -54,6 +54,15 @@ export const HELP = {
     ],
   },
 
+  'section.schedules': {
+    title: 'Schedules',
+    body: [
+      'Every scheduled scan, across every project, in one table — program name and cadence side by side, so you can see at a glance what runs when.',
+      'The new-schedule form (under Configuration → Scans & projects) recommends a day and time itself, picked to avoid landing on the same slot as anything already listed here.',
+      'A collision just means two scans firing at once — nothing breaks, but the traffic piles up instead of spreading out.',
+    ],
+  },
+
   // ── Executive page ────────────────────────────────────────────────────────
   'exec.hero': {
     title: 'The headline number',
