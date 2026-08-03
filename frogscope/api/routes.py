@@ -696,7 +696,9 @@ def _query_args() -> dict[str, Any]:
         "sort": body.get("sort") or request.args.get("sort"),
         "page": int(body.get("page") or request.args.get("page") or 1),
         "page_size": int(body.get("page_size") or request.args.get("page_size") or 100),
-        "columns": body.get("columns"),
+        "columns": body.get("columns") or (
+            request.args["columns"].split(",") if request.args.get("columns") else None
+        ),
         "run": body.get("run") or request.args.get("run"),
         "project": body.get("project") or request.args.get("project"),
         "with_facets": bool(body.get("with_facets", True)),
@@ -844,7 +846,7 @@ def endpoints_export():
     result = facets.query_endpoints(
         conn, run["id"], catalog,
         filters=args["filters"], search=args["search"], sort=args["sort"],
-        page=1, page_size=100000, columns=columns,
+        columns=columns, full=True,
     )
     rows = result["rows"]
 
@@ -2054,7 +2056,7 @@ def export_workbook():
                if c in catalog]
     grid = facets.query_endpoints(
         conn, run["id"], catalog, filters=args["filters"], search=args["search"],
-        sort=args["sort"], page=1, page_size=100000, columns=columns,
+        sort=args["sort"], columns=columns, full=True,
     )
     endpoint_rows = [
         {c: (", ".join(str(x) for x in r[c]) if isinstance(r.get(c), list)

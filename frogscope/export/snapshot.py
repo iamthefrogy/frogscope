@@ -101,9 +101,8 @@ def build_payload(conn: sqlite3.Connection, cfg, run: sqlite3.Row,
 
     # ── Endpoints, columnar ─────────────────────────────────────────────────
     [k for k in catalog.order if not catalog.columns[k].is_list]
-    grid = facets.query_endpoints(conn, run_id, catalog, page=1,
-                                  page_size=1_000_000,
-                                  columns=catalog.order)
+    grid = facets.query_endpoints(conn, run_id, catalog,
+                                  columns=catalog.order, full=True)
     endpoint_rows = grid["rows"]
 
     # Per-endpoint drawer detail. Only what the columnar table above does NOT

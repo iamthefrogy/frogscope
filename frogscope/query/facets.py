@@ -115,6 +115,7 @@ def query_endpoints(conn: sqlite3.Connection, run_id: int, catalog: Catalog, *,
                     filters: dict[str, Any] | None = None, search: str = "",
                     sort: str | None = None, page: int = 1,
                     page_size: int = 100, columns: list[str] | None = None,
+                    full: bool = False,
                     ) -> dict[str, Any]:
     from .filters import compile_sort
 
@@ -125,8 +126,13 @@ def query_endpoints(conn: sqlite3.Connection, run_id: int, catalog: Catalog, *,
         f"SELECT COUNT(*) AS n FROM endpoints WHERE {where}", params
     ).fetchone()["n"]
 
-    page = max(1, int(page))
-    page_size = max(1, min(5000, int(page_size)))
+    if full:
+        # Bulk export: no page cap, grab every matching row in one go.
+        page = 1
+        page_size = max(1, total)
+    else:
+        page = max(1, int(page))
+        page_size = max(1, min(5000, int(page_size)))
     offset = (page - 1) * page_size
 
     select = list(dict.fromkeys(

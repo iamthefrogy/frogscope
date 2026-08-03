@@ -1949,8 +1949,7 @@ def cmd_workbook(args) -> int:
         redactor = Redactor() if args.redact else None
 
         columns = catalog.default_visible()
-        grid = query_endpoints(conn, run["id"], catalog, page=1,
-                               page_size=100000, columns=columns)
+        grid = query_endpoints(conn, run["id"], catalog, columns=columns, full=True)
         endpoint_rows = [
             {c: (", ".join(str(x) for x in r[c]) if isinstance(r.get(c), list)
                  else r.get(c)) for c in columns}
