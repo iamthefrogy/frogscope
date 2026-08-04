@@ -220,10 +220,17 @@ class ScanOptions:
     # answer.
     target_kind: str = "domain"
     profile: str = DEFAULT_PROFILE
-    rate_limit: int = 150
-    threads: int = 50
-    timeout: int = 10
-    retries: int = 1
+    # Deliberately more conservative than httpx/naabu's own upstream
+    # defaults (150/50/10/1) — a wide scan (hundreds of domains, thousands of
+    # hosts) pushed at that rate through a NAT'd/rate-limited network path
+    # (e.g. Docker Desktop on WSL2) drops connections under load, which reads
+    # as a host being dead rather than the request never really landing.
+    # Slower and more patient produces a smaller, truer live-host count
+    # consistently, instead of a bigger one that changes every run.
+    rate_limit: int = 60
+    threads: int = 24
+    timeout: int = 20
+    retries: int = 2
     subfinder: bool = True
     # Set once the user has seen the host count and accepted it. Absent, a scan
     # that expands past CONFIRM_ABOVE pauses instead of probing.
@@ -307,10 +314,10 @@ def parse(payload: dict) -> ScanOptions:
         cidrs=cidrs,
         target_kind=target_kind,
         profile=profile,
-        rate_limit=bounded("rate_limit", 150, 1, 1000),
-        threads=bounded("threads", 50, 1, 300),
-        timeout=bounded("timeout", 10, 1, 60),
-        retries=bounded("retries", 1, 0, 3),
+        rate_limit=bounded("rate_limit", 60, 1, 1000),
+        threads=bounded("threads", 24, 1, 300),
+        timeout=bounded("timeout", 20, 1, 60),
+        retries=bounded("retries", 2, 0, 3),
         subfinder=bool(payload.get("subfinder", True)),
         authorised=bool(payload.get("authorised")),
         # Defaults to the ceiling, not 0: scans proceed without an interactive

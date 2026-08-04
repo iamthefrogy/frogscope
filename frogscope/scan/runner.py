@@ -32,7 +32,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import options as opts
+from . import retry
 from . import tools
+
+# Bounded retry applied to each transient, per-tool subprocess call
+# (subfinder per-domain, naabu, dnsx/mapcidr/tlsx) — enough to ride out a
+# rate-limited upstream or a dropped connection without turning one blip
+# into a permanently-missing result, without letting a genuinely-broken
+# tool retry forever.
+_RETRY_ATTEMPTS = 3
+_RETRY_BASE_DELAY_S = 2.0
+_RETRY_MAX_DELAY_S = 30.0
 
 # Long enough for a wide scan of a large estate, short enough that a wedged
 # process does not hold a slot forever.
@@ -41,6 +51,16 @@ DEFAULT_TIMEOUT = 6 * 60 * 60
 
 class ScanError(RuntimeError):
     pass
+
+
+class ProcessKilled(ScanError):
+    """A scanner subprocess was terminated by a signal it didn't send
+    itself — almost always the OS (or Docker) killing it for using too much
+    memory, not the tool failing on its own. Distinct from a plain nonzero
+    exit: a signal-killed httpx run should never be trusted as "complete
+    with fewer rows", however many rows it managed to write before dying —
+    see `_probe`, where this is the one failure that is always re-raised
+    regardless of partial output."""
 
 
 class EmptyResult(RuntimeError):
@@ -81,6 +101,11 @@ class Progress:
     domains_total: int = 0
     started_at: float = field(default_factory=time.time)
     log: list[str] = field(default_factory=list)
+    # Structured, never-truncated-out-of-view record of every tool call that
+    # exhausted its retries — distinct from `log`, which only ever shows its
+    # last 40 lines to the UI and would bury a failure from early in a long
+    # scan by the time the run finishes.
+    failures: list[dict] = field(default_factory=list)
 
     def note(self, line: str, *, keep: int = 200) -> None:
         self.log.append(line)
@@ -88,6 +113,14 @@ class Progress:
         # only ever shows the tail.
         if len(self.log) > keep:
             del self.log[: len(self.log) - keep]
+
+    def note_failure(self, *, tool: str, target: str, attempts: int,
+                     error: str, keep: int = 500) -> None:
+        self.failures.append({
+            "tool": tool, "target": target, "attempts": attempts, "error": error,
+        })
+        if len(self.failures) > keep:
+            del self.failures[: len(self.failures) - keep]
 
     def as_dict(self) -> dict:
         return {
@@ -100,6 +133,7 @@ class Progress:
             "domains_total": self.domains_total,
             "elapsed": int(time.time() - self.started_at),
             "log": self.log[-40:],
+            "failures": self.failures,
         }
 
 
@@ -130,6 +164,14 @@ class ScanRun:
         self._workdir = workdir
         self._owns_workdir = workdir is None
         self._probe_done = threading.Event()
+        # Set by run() once port-scanning has happened — None until then
+        # (e.g. if the scan fails before reaching that stage). False means
+        # naabu didn't scope this run's ports (absent, or failed after every
+        # retry) and it fell back to probing the whole profile — recorded so
+        # the ingest layer can tell "naabu degraded this run, that alone
+        # explains a different endpoint count" apart from an unexplained
+        # truncation.
+        self.ports_prescoped: bool | None = None
 
     # ── lifecycle ───────────────────────────────────────────────────────────
 
@@ -171,6 +213,12 @@ class ScanRun:
                 f"Use the Docker image, which bundles both, or install them with: "
                 + "; ".join(tools.HINTS[m] for m in needed))
 
+        # Imported here, not at module load: `preflight` imports `ScanError`
+        # from this module, so importing it at the top would be circular.
+        from . import preflight
+        self._emit("preflighting", "Checking DNS and outbound network access")
+        preflight.run(self.options)
+
         directory = Path(self._workdir or tempfile.mkdtemp(prefix="frogscope-scan-"))
         directory.mkdir(parents=True, exist_ok=True)
         hosts_file = directory / "hosts.txt"
@@ -199,6 +247,10 @@ class ScanRun:
 
         port_pairs = self._port_scan(directory, hosts)
         ports_prescoped = port_pairs is not None
+        # Exposed for the ingest layer (executor.py) — it needs to know
+        # whether naabu scoped this run's ports or fell back to the whole
+        # profile, to tell that apart from a silent truncation.
+        self.ports_prescoped = ports_prescoped
         hosts_file.write_text(
             "\n".join(port_pairs if ports_prescoped else hosts) + "\n", encoding="utf-8")
         self._probe(hosts_file, csv_file, ports_prescoped=ports_prescoped)
@@ -237,12 +289,33 @@ class ScanRun:
             nonlocal done
             if self._cancelled.is_set():
                 return set()
-            names: set[str] = set()
-            for line in self._stream(opts.subfinder_argv(binary, domain)):
-                host = line.strip().lower()
-                if host and "." in host and " " not in host:
-                    names.add(host)
-            # The domain itself is worth probing even if enumeration missed it.
+
+            def attempt() -> set[str]:
+                names: set[str] = set()
+                for line in self._stream(opts.subfinder_argv(binary, domain)):
+                    host = line.strip().lower()
+                    if host and "." in host and " " not in host:
+                        names.add(host)
+                return names
+
+            try:
+                names = retry.call_with_backoff(
+                    attempt,
+                    attempts=_RETRY_ATTEMPTS,
+                    base_delay_s=_RETRY_BASE_DELAY_S,
+                    max_delay_s=_RETRY_MAX_DELAY_S,
+                    is_cancelled=self._cancelled.is_set,
+                    on_retry=lambda n, exc: self.progress.note(
+                        f"! subfinder retry {n}/{_RETRY_ATTEMPTS - 1} for "
+                        f"{domain}: {exc}"),
+                )
+            except ScanError as exc:
+                self.progress.note_failure(
+                    tool="subfinder", target=domain,
+                    attempts=_RETRY_ATTEMPTS, error=str(exc))
+                names = set()
+            # The domain itself is worth probing even if enumeration missed
+            # it, or failed outright after every retry.
             names.add(domain)
 
             with lock:
@@ -391,8 +464,8 @@ class ScanRun:
         path.write_text("\n".join(hosts) + "\n", encoding="utf-8")
         self._emit("port_scanning", f"Scanning {len(hosts)} host(s) for open ports")
 
-        pairs: set[str] = set()
-        try:
+        def attempt() -> set[str]:
+            pairs: set[str] = set()
             for line in self._stream(opts.naabu_argv(binary, self.options, input_path=str(path))):
                 rec = _parse_json_line(line)
                 if rec is None:
@@ -401,7 +474,22 @@ class ScanRun:
                 port = rec.get("port")
                 if host and port:
                     pairs.add(f"{host}:{port}")
+            return pairs
+
+        try:
+            pairs = retry.call_with_backoff(
+                attempt,
+                attempts=_RETRY_ATTEMPTS,
+                base_delay_s=_RETRY_BASE_DELAY_S,
+                max_delay_s=_RETRY_MAX_DELAY_S,
+                is_cancelled=self._cancelled.is_set,
+                on_retry=lambda n, exc: self.progress.note(
+                    f"! naabu retry {n}/{_RETRY_ATTEMPTS - 1}: {exc}"),
+            )
         except ScanError as exc:
+            self.progress.note_failure(
+                tool="naabu", target=f"{len(hosts)} host(s)",
+                attempts=_RETRY_ATTEMPTS, error=str(exc))
             self.progress.note(f"! naabu: {exc} — probing every host across "
                                f"the whole port profile instead")
             return None
@@ -449,12 +537,27 @@ class ScanRun:
             if domain_like:
                 path = directory / "correlate_domains.txt"
                 path.write_text("\n".join(domain_like) + "\n", encoding="utf-8")
-                try:
+
+                def resolve_attempt() -> list[dict]:
+                    records = []
                     for line in self._stream(
                             opts.dnsx_resolve_argv(dnsx_binary, input_path=str(path))):
                         rec = _parse_json_line(line)
-                        if rec is None:
-                            continue
+                        if rec is not None:
+                            records.append(rec)
+                    return records
+
+                try:
+                    records = retry.call_with_backoff(
+                        resolve_attempt,
+                        attempts=_RETRY_ATTEMPTS,
+                        base_delay_s=_RETRY_BASE_DELAY_S,
+                        max_delay_s=_RETRY_MAX_DELAY_S,
+                        is_cancelled=self._cancelled.is_set,
+                        on_retry=lambda n, exc: self.progress.note(
+                            f"! dnsx retry {n}/{_RETRY_ATTEMPTS - 1} (resolve): {exc}"),
+                    )
+                    for rec in records:
                         sidecar["dns"].append(rec)
                         dnsx_outputs += 1
                         dnsx_ips.update(str(ip) for ip in (rec.get("a") or []))
@@ -462,6 +565,9 @@ class ScanRun:
                     dnsx_inputs += len(domain_like)
                     dnsx_ran = True
                 except ScanError as exc:
+                    self.progress.note_failure(
+                        tool="dnsx", target=f"{len(domain_like)} domain(s) (resolve)",
+                        attempts=_RETRY_ATTEMPTS, error=str(exc))
                     dnsx_skip = str(exc)
 
             reverse_ips = sorted(dnsx_ips | target_ips)
@@ -480,17 +586,35 @@ class ScanRun:
                 if to_query:
                     path = directory / "correlate_ips.txt"
                     path.write_text("\n".join(to_query) + "\n", encoding="utf-8")
-                    try:
+
+                    def ptr_attempt() -> list[dict]:
+                        records = []
                         for line in self._stream(
                                 opts.dnsx_ptr_argv(dnsx_binary, input_path=str(path))):
                             rec = _parse_json_line(line)
-                            if rec is None:
-                                continue
+                            if rec is not None:
+                                records.append(rec)
+                        return records
+
+                    try:
+                        records = retry.call_with_backoff(
+                            ptr_attempt,
+                            attempts=_RETRY_ATTEMPTS,
+                            base_delay_s=_RETRY_BASE_DELAY_S,
+                            max_delay_s=_RETRY_MAX_DELAY_S,
+                            is_cancelled=self._cancelled.is_set,
+                            on_retry=lambda n, exc: self.progress.note(
+                                f"! dnsx retry {n}/{_RETRY_ATTEMPTS - 1} (ptr): {exc}"),
+                        )
+                        for rec in records:
                             sidecar["ptr"].append(rec)
                             dnsx_outputs += 1
                         dnsx_inputs += len(to_query)
                         dnsx_ran = True
                     except ScanError as exc:
+                        self.progress.note_failure(
+                            tool="dnsx", target=f"{len(to_query)} address(es) (ptr)",
+                            attempts=_RETRY_ATTEMPTS, error=str(exc))
                         dnsx_skip = dnsx_skip or str(exc)
 
         sidecar["collectors"]["dnsx"] = {
@@ -528,13 +652,28 @@ class ScanRun:
                     "skip_reason": "nothing to aggregate", "inputs": 0, "outputs": 0}
         path = directory / "correlate_cidrs.txt"
         path.write_text("\n".join(cidr_input) + "\n", encoding="utf-8")
-        try:
-            aggregated = [
+
+        def attempt() -> list[str]:
+            return [
                 line.strip() for line in
                 self._stream(opts.mapcidr_aggregate_argv(binary, input_path=str(path)))
                 if line.strip()
             ]
+
+        try:
+            aggregated = retry.call_with_backoff(
+                attempt,
+                attempts=_RETRY_ATTEMPTS,
+                base_delay_s=_RETRY_BASE_DELAY_S,
+                max_delay_s=_RETRY_MAX_DELAY_S,
+                is_cancelled=self._cancelled.is_set,
+                on_retry=lambda n, exc: self.progress.note(
+                    f"! mapcidr retry {n}/{_RETRY_ATTEMPTS - 1}: {exc}"),
+            )
         except ScanError as exc:
+            self.progress.note_failure(
+                tool="mapcidr", target=f"{len(cidr_input)} entr{'y' if len(cidr_input) == 1 else 'ies'}",
+                attempts=_RETRY_ATTEMPTS, error=str(exc))
             return {"version": tools.describe("mapcidr").version, "ran": False,
                     "skip_reason": str(exc), "inputs": len(cidr_input), "outputs": 0}
         sidecar["cidrs"]["aggregated"] = aggregated
@@ -558,19 +697,35 @@ class ScanRun:
                     "skip_reason": "no live https endpoints to read", "inputs": 0, "outputs": 0}
         path = directory / "correlate_tls.txt"
         path.write_text("\n".join(tls_targets) + "\n", encoding="utf-8")
-        outputs = 0
-        try:
+
+        def attempt() -> list[dict]:
+            records = []
             for line in self._stream(opts.tlsx_argv(binary, self.options, input_path=str(path))):
                 rec = _parse_json_line(line)
-                if rec is None:
-                    continue
-                sidecar["tls"].append(rec)
-                outputs += 1
+                if rec is not None:
+                    records.append(rec)
+            return records
+
+        try:
+            records = retry.call_with_backoff(
+                attempt,
+                attempts=_RETRY_ATTEMPTS,
+                base_delay_s=_RETRY_BASE_DELAY_S,
+                max_delay_s=_RETRY_MAX_DELAY_S,
+                is_cancelled=self._cancelled.is_set,
+                on_retry=lambda n, exc: self.progress.note(
+                    f"! tlsx retry {n}/{_RETRY_ATTEMPTS - 1}: {exc}"),
+            )
         except ScanError as exc:
+            self.progress.note_failure(
+                tool="tlsx", target=f"{len(tls_targets)} target(s)",
+                attempts=_RETRY_ATTEMPTS, error=str(exc))
             return {"version": tools.describe("tlsx").version, "ran": False,
-                    "skip_reason": str(exc), "inputs": len(tls_targets), "outputs": outputs}
+                    "skip_reason": str(exc), "inputs": len(tls_targets), "outputs": 0}
+        for rec in records:
+            sidecar["tls"].append(rec)
         return {"version": tools.describe("tlsx").version, "ran": True,
-                "skip_reason": "", "inputs": len(tls_targets), "outputs": outputs}
+                "skip_reason": "", "inputs": len(tls_targets), "outputs": len(records)}
 
     def _probe(self, hosts_file: Path, csv_file: Path, *, ports_prescoped: bool = False) -> None:
         binary = tools.find("httpx")
@@ -606,7 +761,14 @@ class ScanRun:
             watcher.join(timeout=3)
 
         written = _count_rows(csv_file)
-        if failure is not None and not written:
+        # A signal-killed httpx (ProcessKilled — see `_stream`) is always a
+        # real failure, however many rows it wrote before dying: the process
+        # didn't choose to stop, so there is no way to tell "that's genuinely
+        # everything live" from "it got cut off after host #50 of 300". A
+        # plain nonzero self-exit with partial rows is left as-is below —
+        # that's the "one unsupported flag shouldn't cost the whole run" case
+        # this function's own comment already documents.
+        if failure is not None and (not written or isinstance(failure, ProcessKilled)):
             raise failure
         if failure is not None:
             self.progress.note(f"! {failure} — keeping the {written} row(s) it "
@@ -677,7 +839,25 @@ class ScanRun:
         self._check_cancelled()
         if process.returncode not in (0, None):
             detail = "; ".join(stderr_tail[-3:]) or "no error output"
-            self._last_error = f"{Path(argv[0]).name} exited {process.returncode}: {detail}"
+            name = Path(argv[0]).name
+            # A negative returncode means the OS terminated the process with
+            # a signal it did not choose to exit with itself (our own
+            # cancel() is already handled above, via _check_cancelled) — on
+            # this codepath that's almost always an OOM kill. Whatever the
+            # process had written so far cannot be trusted as "the whole
+            # scan, just smaller" the way a normal nonzero exit can.
+            if process.returncode < 0:
+                sig = -process.returncode
+                try:
+                    sig_name = signal.Signals(sig).name
+                except ValueError:
+                    sig_name = str(sig)
+                self._last_error = (
+                    f"{name} was killed by signal {sig} ({sig_name}) — likely "
+                    f"out of memory. This run should not be trusted as complete."
+                )
+                raise ProcessKilled(self._last_error)
+            self._last_error = f"{name} exited {process.returncode}: {detail}"
             raise ScanError(self._last_error)
 
 

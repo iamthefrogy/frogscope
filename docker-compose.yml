@@ -26,6 +26,26 @@ services:
     # Scanning needs no privileges beyond outbound network.
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
+    # A wide scan runs several subfinder processes plus one httpx/naabu
+    # process each threaded in the dozens, all at once — I/O-bound (waiting
+    # on the network), not CPU-hungry, so there's no `cpus` limit here.
+    # Without a memory ceiling, an uncapped container under WSL2's shared VM
+    # budget can get OOM-killed mid-scan with no clear signal, which looks
+    # exactly like "the scan just returned fewer results this time."
+    mem_limit: 2g
+    ulimits:
+      # Comfortable headroom over the concurrent connections a wide scan
+      # opens (httpx + naabu threads + subfinder workers + SQLite/Flask).
+      nofile:
+        soft: 65536
+        hard: 65536
+    # Docker's embedded resolver / WSL2's NAT'd DNS forwarding is a known
+    # source of intermittent lookup failures under load. Pinned here instead
+    # of relying on it — only safe because no target domain needs an
+    # internal/split-horizon resolver to resolve correctly.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
 
 volumes:
   frogscope-data:

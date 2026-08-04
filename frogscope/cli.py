@@ -332,12 +332,23 @@ def cmd_scan(args) -> int:
     conn = connect(cfg.db_path)
     try:
         migrate(conn)
-        result = pipeline.ingest(
-            conn, cfg, csv_path, project=args.project,
-            project_name=args.project_name, label=args.label,
-            supervised=True, trust_mtime=False, scanned_at=started_at,
-            allow_drift=True, correlation=run.artifacts.get("correlation"),
-        )
+        try:
+            result = pipeline.ingest(
+                conn, cfg, csv_path, project=args.project,
+                project_name=args.project_name, label=args.label,
+                supervised=True, trust_mtime=False, scanned_at=started_at,
+                # Same reasoning as scan/executor.py: a hardcoded True here
+                # let a truncated run (same host list, far fewer rows) land
+                # silently. hosts_submitted/ports_prescoped let the real
+                # target-list/profile changes still through automatically.
+                allow_drift=False,
+                hosts_submitted=run.progress.hosts_total or None,
+                ports_prescoped=run.ports_prescoped,
+                correlation=run.artifacts.get("correlation"),
+            )
+        except pipeline.IncompleteScan as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_ERROR
         conn.execute(
             # `correlated` is set by ingest() itself, from whether it was
             # actually given a correlation sidecar to attach — not repeated

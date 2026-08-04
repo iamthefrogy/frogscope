@@ -119,6 +119,72 @@ def drift_check(endpoint_count: int, previous_count: int | None,
     return None
 
 
+def truncation_check(
+    endpoint_count: int,
+    previous_count: int | None,
+    *,
+    hosts_submitted: int | None,
+    previous_hosts_submitted: int | None,
+    ports_prescoped: int | None,
+    previous_ports_prescoped: int | None,
+    threshold_pct: float = 30.0,
+    host_tolerance_pct: float = 10.0,
+) -> tuple[str | None, bool]:
+    """Like `drift_check`, but for a scan (not an upload) it also knows how
+    many hosts were actually submitted to httpx this run and last — which is
+    what tells a truncated run (same host list, far fewer rows because httpx
+    died partway through) apart from a legitimately different one (a bigger
+    or smaller portfolio, or a port-profile change).
+
+    Returns `(warning, is_suspected_truncation)`. `is_suspected_truncation`
+    means this needs the `confirm_truncation` override, distinct from
+    `allow_drift` — the whole reason this function exists is that a blanket
+    `allow_drift=True` was silently swallowing exactly this case.
+    """
+    if hosts_submitted is None or previous_hosts_submitted is None:
+        # Upload, or a run ingested before this signal existed — no host-list
+        # signal available, so fall back to the plain count-only check.
+        return drift_check(endpoint_count, previous_count, threshold_pct), False
+
+    if not previous_count or not previous_hosts_submitted:
+        return None, False
+
+    delta_pct = 100.0 * abs(endpoint_count - previous_count) / previous_count
+    if delta_pct <= threshold_pct:
+        return None, False
+
+    direction = "more" if endpoint_count > previous_count else "fewer"
+    headline = (
+        f"endpoint count changed by {delta_pct:.0f}% ({previous_count} -> "
+        f"{endpoint_count}, {direction})"
+    )
+
+    if (ports_prescoped is not None and previous_ports_prescoped is not None
+            and bool(ports_prescoped) != bool(previous_ports_prescoped)):
+        # A known, explained cause of a different count — not a silent
+        # truncation, so this is informative rather than blocking.
+        naabu_note = (
+            "naabu scoped ports this run but fell back to the full profile "
+            "last time" if ports_prescoped else
+            "naabu fell back to the full port profile this run, unlike the "
+            "last one"
+        )
+        return f"{headline} — {naabu_note}; this alone can explain the swing", False
+
+    host_delta_pct = (100.0 * abs(hosts_submitted - previous_hosts_submitted)
+                      / previous_hosts_submitted)
+    if host_delta_pct > host_tolerance_pct:
+        # A genuinely different target list legitimately changes the count.
+        return (f"{headline} — the target list also changed "
+                f"({previous_hosts_submitted} -> {hosts_submitted} hosts submitted)"), False
+
+    return (
+        f"{headline} while submitting essentially the same "
+        f"{hosts_submitted} host(s) as last time ({previous_hosts_submitted}) "
+        f"— this looks like a truncated run, not a real change"
+    ), True
+
+
 def suggest_httpx_flags(census: list[dict]) -> list[dict[str, Any]]:
     """Recommend flags based on which columns are actually empty.
 

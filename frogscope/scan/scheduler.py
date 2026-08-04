@@ -158,30 +158,45 @@ class Scheduler:
 
         started_at = datetime.now(UTC).replace(microsecond=0).isoformat()
         run = ScanRun(options)
-        try:
-            csv_path = run.run()
-        except NeedsApproval as pause:
-            self._record(
-                conn, schedule["id"], nxt,
-                skip_reason=(
-                    f"{len(pause.hosts)} hosts found, over this schedule's "
-                    f"{schedule['max_hosts_cap']}-host cap — run skipped rather "
-                    f"than probing more than was agreed"))
-            return
-        except (ScanError, EmptyResult, Cancelled) as exc:
-            self._record(conn, schedule["id"], nxt, skip_reason=str(exc))
-            return
 
-        try:
-            result = executor.ingest_scan_result(
-                self.cfg, csv_path, options, run, started_at,
-                project=schedule["project_slug"], label=schedule["name"])
-        except Exception as exc:  # ingest failing must not wedge the schedule
+        # Same slot a manual scan takes (routes.py) — without this, a
+        # schedule firing while someone is running a manual scan (or two
+        # schedules overlapping) would probe the same estate twice at once,
+        # competing for CPU/network/fds and producing exactly the kind of
+        # load-dependent truncated run this scheduler should never cause.
+        acquired = executor.SCAN_SLOT.acquire(timeout=1)
+        if not acquired:
             self._record(conn, schedule["id"], nxt,
-                        skip_reason=f"{type(exc).__name__}: {exc}")
+                        skip_reason="another scan holds the slot — will "
+                                    "retry on the next tick")
             return
+        try:
+            try:
+                csv_path = run.run()
+            except NeedsApproval as pause:
+                self._record(
+                    conn, schedule["id"], nxt,
+                    skip_reason=(
+                        f"{len(pause.hosts)} hosts found, over this schedule's "
+                        f"{schedule['max_hosts_cap']}-host cap — run skipped rather "
+                        f"than probing more than was agreed"))
+                return
+            except (ScanError, EmptyResult, Cancelled) as exc:
+                self._record(conn, schedule["id"], nxt, skip_reason=str(exc))
+                return
 
-        self._record(conn, schedule["id"], nxt, run_id=result.run_id)
+            try:
+                result = executor.ingest_scan_result(
+                    self.cfg, csv_path, options, run, started_at,
+                    project=schedule["project_slug"], label=schedule["name"])
+            except Exception as exc:  # ingest failing must not wedge the schedule
+                self._record(conn, schedule["id"], nxt,
+                            skip_reason=f"{type(exc).__name__}: {exc}")
+                return
+
+            self._record(conn, schedule["id"], nxt, run_id=result.run_id)
+        finally:
+            executor.SCAN_SLOT.release()
 
     def _record(self, conn, schedule_id: int, next_at: str, *,
                run_id: int | None = None, skip_reason: str = "") -> None:

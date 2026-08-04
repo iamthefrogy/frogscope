@@ -413,6 +413,47 @@ def test_the_offered_override_actually_ungates_the_ingest(db, cfg, tmp_path):
     assert any("changed by" in w for w in result.warnings)
 
 
+def test_truncation_needs_its_own_override_not_allow_drift(db, cfg, tmp_path):
+    """The bug this closes: a hardcoded `allow_drift=True` on the scan path
+    (scan/executor.py) used to silently swallow a truncated run that
+    submitted the same host list both times. `confirm_truncation` is a
+    distinct flag specifically so `allow_drift=True` can no longer do that."""
+    import csv
+
+    with FIXTURE.open(newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        fields, rows = reader.fieldnames, list(reader)
+
+    big = tmp_path / "big.csv"
+    with big.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    pipeline.ingest(db, cfg, big, project="p1", label="big",
+                    allow_incomplete=True,
+                    hosts_submitted=300, ports_prescoped=True)
+
+    small = tmp_path / "small.csv"
+    with small.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows[:8])          # far more than 30% smaller
+
+    # Same host list submitted both times — this is a suspected truncation,
+    # and allow_drift=True must NOT be enough to let it through.
+    with pytest.raises(pipeline.TruncationSuspected) as caught:
+        pipeline.ingest(db, cfg, small, project="p1", label="small",
+                        allow_incomplete=True, allow_drift=True,
+                        hosts_submitted=300, ports_prescoped=True)
+    assert caught.value.override == "confirm_truncation"
+
+    # Only the correctly-named override actually ungates it.
+    result = pipeline.ingest(db, cfg, small, project="p1", label="small",
+                             allow_incomplete=True, confirm_truncation=True,
+                             hosts_submitted=300, ports_prescoped=True)
+    assert result.endpoint_count > 0
+
+
 def test_the_api_tells_the_ui_which_override_to_offer(client, db, cfg, tmp_path):
     import csv
     import io

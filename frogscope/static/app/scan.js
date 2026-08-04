@@ -52,7 +52,7 @@ export function ScanPanel({ project, onIngested, embedded }) {
   const [label, setLabel] = useState('');
   const [subfinder, setSubfinder] = useState(true);
   const [authorised, setAuthorised] = useState(false);
-  const [rateLimit, setRateLimit] = useState(150);
+  const [rateLimit, setRateLimit] = useState(60);
   const [advanced, setAdvanced] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
   const [scheduled, setScheduled] = useState(false);
@@ -423,6 +423,17 @@ function ScanProgress({ job, onApprove, onCancel }) {
           produces no row, so this bar is a floor rather than a percentage.
         </div>` : null}
       </div></div>
+    ${(p.failures || []).length ? html`<div class="banner" style="margin-bottom:10px">
+      <span>▲</span><div>
+        <strong>${p.failures.length} tool call${p.failures.length === 1 ? '' : 's'}
+          failed after retrying.</strong>
+        <div class="subtle" style="margin-top:4px">
+          These targets did not make it into this run's results.
+        </div>
+        <div class="kv" style="margin-top:6px;max-height:120px;overflow:auto;font-size:11px">
+          ${p.failures.map((f) => html`<div>${f.tool}: ${f.target} — ${f.error}</div>`)}
+        </div>
+      </div></div>` : null}
     <button class="btn btn-sm btn-danger" onClick=${onCancel}>Stop the scan</button>
     ${(p.log || []).length ? html`<details style="margin-top:10px">
       <summary class="subtle" style="cursor:pointer">Activity</summary>

@@ -250,6 +250,43 @@ def test_uppercasing_a_hostname_does_not_create_a_new_asset(db, cfg, tmp_path,
 
 # ── Completeness guard ──────────────────────────────────────────────────────
 
+def test_hosts_submitted_and_ports_prescoped_round_trip_through_a_run(
+        db, cfg, tmp_path, monkeypatch):
+    """These two columns are what `quality.truncation_check` needs from the
+    *previous* run to tell a truncated scan apart from a legitimately
+    different one — persisted here, read back via `store.previous_run`."""
+    from frogscope.ingest import store
+
+    monkeypatch.setattr(cfg, "data_dir", tmp_path)
+    result = pipeline.ingest(
+        db, cfg, FIXTURE, project="hs-test", label="fixture",
+        allow_incomplete=True, keep_raw=False,
+        hosts_submitted=42, ports_prescoped=True)
+
+    row = db.execute("SELECT * FROM runs WHERE id = ?",
+                     (result.run_id,)).fetchone()
+    assert row["hosts_submitted"] == 42
+    assert row["ports_prescoped"] == 1
+
+    project_id = row["project_id"]
+    prev = store.previous_run(db, project_id)
+    assert prev["hosts_submitted"] == 42
+    assert prev["ports_prescoped"] == 1
+
+
+def test_hosts_submitted_defaults_to_null_for_an_upload(db, cfg, tmp_path,
+                                                          monkeypatch):
+    monkeypatch.setattr(cfg, "data_dir", tmp_path)
+    result = pipeline.ingest(
+        db, cfg, FIXTURE, project="upload-test", label="fixture",
+        allow_incomplete=True, keep_raw=False)
+
+    row = db.execute("SELECT * FROM runs WHERE id = ?",
+                     (result.run_id,)).fetchone()
+    assert row["hosts_submitted"] is None
+    assert row["ports_prescoped"] is None
+
+
 def test_in_progress_scan_is_refused_by_default(db, cfg, tmp_path, monkeypatch):
     """A truncated scan becomes a permanent fake improvement in the trendline."""
     from datetime import datetime, timedelta

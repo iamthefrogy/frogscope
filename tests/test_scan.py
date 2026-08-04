@@ -349,6 +349,34 @@ def test_a_missing_scanner_is_explained_not_crashed(monkeypatch, tmp_path):
     assert "Docker" in message or "go install" in message
 
 
+def test_preflight_failure_stops_the_scan_before_any_subprocess_runs(
+        monkeypatch, tmp_path):
+    """A broken DNS/network environment should be reported once, clearly, up
+    front — not discovered piecemeal as every domain's subfinder call fails
+    one by one over the following minutes."""
+    from frogscope.scan import preflight
+
+    parsed = opts.parse({"domains": ["example.com"], "authorised": True})
+    run = ScanRun(parsed, workdir=tmp_path)
+    monkeypatch.setattr(tools, "missing", lambda: [])
+
+    def boom(options):
+        raise preflight.PreflightError("network is unreachable in this test")
+
+    monkeypatch.setattr(preflight, "run", boom)
+
+    import subprocess as subprocess_mod
+
+    def popen_should_not_be_called(*args, **kwargs):
+        raise AssertionError(
+            "subprocess.Popen must not run once preflight has failed")
+
+    monkeypatch.setattr(subprocess_mod, "Popen", popen_should_not_be_called)
+
+    with pytest.raises(preflight.PreflightError):
+        run.run()
+
+
 def test_tool_inventory_never_raises_when_nothing_is_installed(monkeypatch):
     monkeypatch.setattr(tools, "find", lambda name: "")
     found = tools.inventory()
@@ -740,22 +768,112 @@ def test_every_domain_and_its_subdomains_end_up_in_one_list(monkeypatch, tmp_pat
 def test_one_failing_domain_does_not_lose_the_others(monkeypatch, tmp_path):
     """A portfolio of hundreds will contain a few that error. Discarding every other
     result for one of them would be absurd."""
+    from frogscope.scan import runner
     from frogscope.scan.runner import ScanError
+
+    monkeypatch.setattr(runner.time, "sleep", lambda s: None)  # skip backoff delay
 
     parsed = opts.parse({"domains": "good.example.com\nbad.example.com",
                          "authorised": True})
     run = ScanRun(parsed, workdir=tmp_path)
     monkeypatch.setattr(tools, "find", lambda name: f"/usr/bin/{name}")
 
+    calls_for_bad = 0
+
     def fake_stream(argv):
+        nonlocal calls_for_bad
         domain = argv[argv.index("-d") + 1]
         if domain.startswith("bad"):
+            calls_for_bad += 1
             raise ScanError("subfinder exited 1")
         yield f"www.{domain}\n"
 
     monkeypatch.setattr(run, "_stream", fake_stream)
     hosts = run._enumerate()
+
     assert "www.good.example.com" in hosts
+    # Retried the full attempt budget, not given up after one failure...
+    assert calls_for_bad == runner._RETRY_ATTEMPTS
+    # ...but the bare domain still reaches the host list even after every
+    # attempt failed, same as when enumeration simply found nothing for it.
+    assert "bad.example.com" in hosts
+    # ...and the failure is recorded structurally, not just in the scrolling
+    # log the UI truncates to its last 40 lines.
+    assert run.progress.failures == [{
+        "tool": "subfinder", "target": "bad.example.com",
+        "attempts": runner._RETRY_ATTEMPTS, "error": "subfinder exited 1",
+    }]
+
+
+# ── httpx killed mid-probe vs finished clean ────────────────────────────────
+
+def test_stream_detects_a_real_signal_kill(tmp_path):
+    """End-to-end, no mocking: a subprocess that kills itself with SIGKILL
+    must surface as `ProcessKilled`, not a plain nonzero-exit `ScanError` —
+    that distinction is what `_probe` uses to decide whether partial output
+    can be trusted."""
+    import sys
+
+    from frogscope.scan.runner import ProcessKilled
+
+    parsed = opts.parse({"domains": ["example.com"], "authorised": True})
+    run = ScanRun(parsed, workdir=tmp_path)
+
+    argv = [sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"]
+    with pytest.raises(ProcessKilled) as caught:
+        list(run._stream(argv))
+    assert "SIGKILL" in str(caught.value)
+
+
+def test_probe_raises_when_httpx_is_signal_killed_even_with_partial_rows(
+        monkeypatch, tmp_path):
+    """An OOM-killed (or otherwise signal-killed) httpx cannot be told apart
+    from "genuinely fewer live hosts" by row count alone — the process never
+    got to decide it was finished, so partial output must not be trusted as
+    a complete, if smaller, result."""
+    from frogscope.scan.runner import ProcessKilled
+
+    parsed = opts.parse({"domains": ["example.com"], "authorised": True})
+    run = ScanRun(parsed, workdir=tmp_path)
+
+    hosts_file = tmp_path / "hosts.txt"
+    hosts_file.write_text("a.example.com\nb.example.com\n", encoding="utf-8")
+    csv_file = tmp_path / "scan.csv"
+
+    def fake_stream(argv):
+        csv_file.write_text("host,port\na.example.com,443\n", encoding="utf-8")
+        raise ProcessKilled("httpx was killed by signal 9 (SIGKILL)")
+        yield  # pragma: no cover — makes this a generator function
+
+    monkeypatch.setattr(run, "_stream", fake_stream)
+
+    with pytest.raises(ProcessKilled):
+        run._probe(hosts_file, csv_file)
+
+
+def test_probe_keeps_partial_rows_on_a_plain_nonzero_exit(monkeypatch, tmp_path):
+    """Regression: an httpx that exits nonzero on its own (bad flag, etc.)
+    keeps whatever it wrote, same as before this change — only a signal
+    kill (above) is always treated as a real failure."""
+    from frogscope.scan.runner import ScanError
+
+    parsed = opts.parse({"domains": ["example.com"], "authorised": True})
+    run = ScanRun(parsed, workdir=tmp_path)
+
+    hosts_file = tmp_path / "hosts.txt"
+    hosts_file.write_text("a.example.com\nb.example.com\n", encoding="utf-8")
+    csv_file = tmp_path / "scan.csv"
+
+    def fake_stream(argv):
+        csv_file.write_text("host,port\na.example.com,443\n", encoding="utf-8")
+        raise ScanError("httpx exited 1: unsupported flag")
+        yield  # pragma: no cover — makes this a generator function
+
+    monkeypatch.setattr(run, "_stream", fake_stream)
+
+    run._probe(hosts_file, csv_file)  # must not raise
+    assert run.progress.endpoints_found == 1
+    assert any("keeping the 1 row" in line for line in run.progress.log)
 
 
 def test_cancelling_stops_every_worker_not_just_one():

@@ -21,6 +21,10 @@ def connect(db_path: Path | str, *, readonly: bool = False) -> sqlite3.Connectio
 
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Concurrent writers (e.g. a scheduled scan and a manual one, if they ever
+    # slip past SCAN_SLOT) retry against SQLITE_BUSY for this long instead of
+    # failing the write outright.
+    conn.execute("PRAGMA busy_timeout = 8000")
     if not readonly:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")

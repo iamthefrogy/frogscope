@@ -216,3 +216,50 @@ def test_tick_skips_cleanly_when_targets_resolve_to_nothing(client, project):
     assert resp.status_code == 200
     schedule = resp.get_json()["schedule"]
     assert schedule["last_skip_reason"] != ""
+
+
+def test_run_now_holds_scan_slot_while_running_and_releases_it_after(
+        client, project, cfg, monkeypatch):
+    """A scheduled run must take the same SCAN_SLOT a manual scan does
+    (executor.py's own docstring says this is the whole point of the
+    semaphore) — otherwise a schedule firing mid-manual-scan races it for
+    CPU/network/fds, a plausible cause of truncated, inconsistent counts."""
+    from frogscope.scan import executor
+    from frogscope.scan.runner import ScanRun
+
+    held_during_run = []
+
+    real_run = ScanRun.run
+
+    def spying_run(self):
+        held_during_run.append(executor.SCAN_SLOT._value)
+        return real_run(self)
+
+    monkeypatch.setattr(ScanRun, "run", spying_run)
+
+    created = _create(client, project).get_json()["schedule"]
+    assert executor.SCAN_SLOT._value == 1  # untouched before the run
+
+    resp = client.post(f"/api/schedules/{created['id']}/run-now")
+    assert resp.status_code == 200
+
+    assert held_during_run == [0]  # slot was held (0 available) during run()
+    assert executor.SCAN_SLOT._value == 1  # released afterwards
+
+
+def test_run_now_skips_cleanly_when_another_scan_holds_the_slot(
+        client, project, cfg):
+    from frogscope.scan import executor
+
+    created = _create(client, project).get_json()["schedule"]
+
+    executor.SCAN_SLOT.acquire()
+    try:
+        resp = client.post(f"/api/schedules/{created['id']}/run-now")
+    finally:
+        executor.SCAN_SLOT.release()
+
+    assert resp.status_code == 200
+    schedule = resp.get_json()["schedule"]
+    assert "slot" in schedule["last_skip_reason"]
+    assert schedule["last_run_id"] is None

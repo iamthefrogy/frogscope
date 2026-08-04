@@ -62,6 +62,21 @@ class ScaleDrift(IncompleteScan):
     override = "allow_drift"
 
 
+class TruncationSuspected(ScaleDrift):
+    """A scan submitted essentially the same host list as its predecessor but
+    produced a wildly different endpoint count — the signature of a scanner
+    subprocess dying partway through, not a real change in the estate.
+
+    A subclass of `ScaleDrift` so existing `except ScaleDrift`/`IncompleteScan`
+    callers keep working, but with its own override: `allow_drift` must NOT
+    ungate this (that flag is what let this exact failure mode go silently
+    ingested before — see `scan/executor.py`), only an explicit
+    `confirm_truncation` should.
+    """
+
+    override = "confirm_truncation"
+
+
 @dataclass
 class IngestResult:
     run_id: int
@@ -386,9 +401,12 @@ def ingest(conn: sqlite3.Connection, cfg: Config, path: Path | str, *,
            project: str = "default", project_name: str | None = None,
            label: str | None = None, run_kind: str = "adhoc",
            force: bool = False, allow_incomplete: bool = False,
-           allow_drift: bool = False, keep_raw: bool = True,
+           allow_drift: bool = False, confirm_truncation: bool = False,
+           keep_raw: bool = True,
            trust_mtime: bool = True, supervised: bool = False,
            scanned_at: str | None = None,
+           hosts_submitted: int | None = None,
+           ports_prescoped: bool | None = None,
            correlation=None) -> IngestResult:
     """`correlation`: a path to (or already-loaded) `correlation.json` sidecar
     from an opt-in correlated scan — see `ScanRun._correlate` and
@@ -467,8 +485,16 @@ def ingest(conn: sqlite3.Connection, cfg: Config, path: Path | str, *,
         )
     warnings.extend(completeness)
 
-    drift = quality.drift_check(len(records), previous_count)
-    if drift and not allow_drift:
+    drift, suspected_truncation = quality.truncation_check(
+        len(records), previous_count,
+        hosts_submitted=hosts_submitted,
+        previous_hosts_submitted=prev["hosts_submitted"] if prev else None,
+        ports_prescoped=ports_prescoped,
+        previous_ports_prescoped=prev["ports_prescoped"] if prev else None,
+    )
+    if drift and suspected_truncation and not confirm_truncation:
+        raise TruncationSuspected(f"suspicious change in scale: {drift}", [drift])
+    if drift and not suspected_truncation and not allow_drift:
         raise ScaleDrift(f"suspicious change in scale: {drift}", [drift])
     if drift:
         warnings.append(drift)
@@ -523,6 +549,9 @@ def ingest(conn: sqlite3.Connection, cfg: Config, path: Path | str, *,
         "rules_hash": rules_fingerprint(ruleset),
         "rules_version": ruleset.version,
         "risk_summary": risk_summary,
+        "hosts_submitted": hosts_submitted,
+        "ports_prescoped": (None if ports_prescoped is None
+                            else int(ports_prescoped)),
     }
 
     try:

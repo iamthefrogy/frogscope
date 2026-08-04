@@ -50,15 +50,27 @@ def ingest_scan_result(cfg: Config, csv_path: Path, options, run: ScanRun,
             # The scan's own clock, so a scanner that omits per-row
             # timestamps still lands correctly in the timeline.
             scanned_at=started_at,
-            # The port profile legitimately changes the endpoint count, so a
-            # profile change must not be mistaken for a shrinking estate.
-            allow_drift=True,
+            # NOT blanket-True: `hosts_submitted`/`ports_prescoped` below let
+            # `quality.truncation_check` tell a legitimate target-list/
+            # profile change (auto-permitted, same as before) apart from a
+            # truncated run (same host list, far fewer rows) — the case a
+            # hardcoded `allow_drift=True` used to let through silently.
+            allow_drift=False,
+            hosts_submitted=run.progress.hosts_total or None,
+            ports_prescoped=run.ports_prescoped,
             correlation=run.artifacts.get("correlation"),
         )
+        scan_meta = {
+            **options.as_dict(),
+            # Every tool call that exhausted its retries this run — kept
+            # here so run history shows it later, not just the live progress
+            # log (which only ever shows its last 40 lines to the UI).
+            "failures": run.progress.failures,
+        }
         conn.execute(
             "UPDATE runs SET source_kind = 'scan', scan_json = ?, "
             "target_kind = ? WHERE id = ?",
-            (json.dumps(options.as_dict()), options.target_kind, result.run_id))
+            (json.dumps(scan_meta), options.target_kind, result.run_id))
         conn.commit()
     finally:
         conn.close()

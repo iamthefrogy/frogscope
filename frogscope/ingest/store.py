@@ -133,8 +133,9 @@ def insert_run(conn: sqlite3.Connection, project_id: int, meta: dict[str, Any]) 
                content_sha256, row_count, endpoint_count, host_count,
                config_hash, is_baseline, duplicate_of, incomplete,
                warnings_json, summary_json,
-               rules_hash, rules_version, risk_summary_json
-           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               rules_hash, rules_version, risk_summary_json,
+               hosts_submitted, ports_prescoped
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             project_id,
             meta["run_key"],
@@ -159,6 +160,8 @@ def insert_run(conn: sqlite3.Connection, project_id: int, meta: dict[str, Any]) 
             meta.get("rules_hash"),
             meta.get("rules_version"),
             json.dumps(meta.get("risk_summary") or {}, default=str),
+            meta.get("hosts_submitted"),
+            meta.get("ports_prescoped"),
         ),
     )
     return int(cur.lastrowid)
