@@ -1,5 +1,7 @@
 # Frogscope
 
+<img width="1774" height="887" alt="image" src="https://github.com/user-attachments/assets/67c33479-089a-406e-96fb-493351e39400" />
+
 ## What it is
 
 Frogscope points at your internet-facing estate - domains, IP addresses, or
