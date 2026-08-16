@@ -97,6 +97,10 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .btn-danger { border-color: var(--color-danger); color: var(--color-danger); }
 .btn-danger:hover { background: rgba(239, 68, 68, 0.12);
                     border-color: var(--color-danger); }
+/* A schedule firing on its own clock (scan/scheduler.py's tick, not a click
+ * in this browser) still needs visible feedback — this is that state. */
+.btn-warn { border-color: var(--color-warning); color: var(--color-warning); }
+.btn-warn:hover { background: rgba(245, 158, 11, 0.12); border-color: var(--color-warning); }
 
 /* Deleting things lives in its own visually separated block, below everything
  * else, so nobody arrives at it by accident. */

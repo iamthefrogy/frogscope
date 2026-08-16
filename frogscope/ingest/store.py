@@ -665,12 +665,13 @@ def insert_schedule(conn: sqlite3.Connection, project_id: int, data: dict) -> in
         "INSERT INTO schedules "
         "(project_id, name, target_kind, targets_json, profile, flags_json, "
         " correlate_json, subfinder, preset, time_of_day, day_of_week, "
-        " max_hosts_cap, enabled, next_run_at, created_at, updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " timezone, max_hosts_cap, enabled, next_run_at, created_at, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (project_id, data["name"], data["target_kind"], data["targets_json"],
          data["profile"], data["flags_json"], data["correlate_json"],
          int(bool(data.get("subfinder", True))), data["preset"],
          data.get("time_of_day"), data.get("day_of_week"),
+         data.get("timezone") or "UTC",
          int(data["max_hosts_cap"]), int(bool(data.get("enabled", True))),
          data["next_run_at"], now, now),
     )

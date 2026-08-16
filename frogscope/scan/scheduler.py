@@ -23,12 +23,28 @@ from __future__ import annotations
 import json
 import threading
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..config import Config
 from ..db.connection import connect
 from . import executor
 from . import options as opts
 from .runner import Cancelled, EmptyResult, NeedsApproval, ScanError, ScanRun
+
+# Which schedules are mid-run right now — set from `_run_one`, read by
+# `is_running()`. Exists so the UI (schedule.js) can show a schedule fired by
+# the scheduler's own tick as "running" too, not just one a click in that
+# browser started: without this there is no client-visible signal at all
+# that an unattended run is in flight, on top of the one a manual "Run now"
+# click already gets from its own request being outstanding.
+_RUNNING_LOCK = threading.Lock()
+_RUNNING_IDS: set[int] = set()
+
+
+def is_running(schedule_id: int) -> bool:
+    with _RUNNING_LOCK:
+        return schedule_id in _RUNNING_IDS
+
 
 # One check a minute is frequent enough that "daily at 03:00" fires within a
 # minute of meaning it, and cheap enough that it costs nothing between ticks.
@@ -49,37 +65,62 @@ def _parse_time(value: str | None) -> tuple[int, int]:
         return 3, 0
 
 
+def _resolve_zone(timezone: str | None) -> ZoneInfo:
+    if not timezone:
+        return UTC
+    try:
+        return ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        # An unrecognised zone must never crash the tick loop or a create/
+        # update request — falling back to UTC is the same failure mode a
+        # schedule created before this column existed already has.
+        return UTC
+
+
 def next_run_at(preset: str, time_of_day: str | None,
-                day_of_week: int | None, *, now: datetime | None = None) -> str:
+                day_of_week: int | None, timezone: str | None = None,
+                *, now: datetime | None = None) -> str:
     """The next fire time for a schedule, computed fresh each time a run
     completes (or right after creation) rather than as a fixed recurrence
     rule — simpler to reason about, and immune to drift from a missed tick
     (a server that was down at 03:00 just runs at the next tick that notices
     it is overdue, instead of never).
+
+    `time_of_day` is interpreted in `timezone` (an IANA name, e.g.
+    "Asia/Kolkata") — the browser's own zone by default (schedule.js detects
+    it via `Intl.DateTimeFormat().resolvedOptions().timeZone`), not UTC.
+    Everything returned and stored is still UTC — only the interpretation of
+    the wall-clock `time_of_day` the user typed changes.
     """
     now = now or datetime.now(UTC)
     hh, mm = _parse_time(time_of_day)
 
     if preset == "hourly":
+        # Minute-of-hour is the same instant in every zone with a whole-hour
+        # UTC offset — the only zones where it drifts (:30/:45 offsets) don't
+        # have a "time of day" to begin with, so there is nothing to convert.
         candidate = now.replace(minute=mm % 60, second=0, microsecond=0)
         if candidate <= now:
             candidate += timedelta(hours=1)
         return candidate.isoformat()
 
+    zone = _resolve_zone(timezone)
+    local_now = now.astimezone(zone)
+
     if preset == "weekly":
         target_dow = day_of_week if day_of_week is not None else 0
-        candidate = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        candidate = local_now.replace(hour=hh, minute=mm, second=0, microsecond=0)
         days_ahead = (target_dow - candidate.weekday()) % 7
         candidate += timedelta(days=days_ahead)
-        if candidate <= now:
+        if candidate <= local_now:
             candidate += timedelta(days=7)
-        return candidate.isoformat()
+        return candidate.astimezone(UTC).isoformat()
 
     # daily (default preset)
-    candidate = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    if candidate <= now:
+    candidate = local_now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    if candidate <= local_now:
         candidate += timedelta(days=1)
-    return candidate.isoformat()
+    return candidate.astimezone(UTC).isoformat()
 
 
 class Scheduler:
@@ -131,8 +172,18 @@ class Scheduler:
             conn.close()
 
     def _run_one(self, conn, schedule: dict) -> None:
+        schedule_id = schedule["id"]
+        with _RUNNING_LOCK:
+            _RUNNING_IDS.add(schedule_id)
+        try:
+            self._run_one_inner(conn, schedule)
+        finally:
+            with _RUNNING_LOCK:
+                _RUNNING_IDS.discard(schedule_id)
+
+    def _run_one_inner(self, conn, schedule: dict) -> None:
         nxt = next_run_at(schedule["preset"], schedule["time_of_day"],
-                          schedule["day_of_week"])
+                          schedule["day_of_week"], schedule.get("timezone"))
 
         try:
             targets = json.loads(schedule["targets_json"] or "[]")

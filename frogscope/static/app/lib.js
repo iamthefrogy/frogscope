@@ -1,5 +1,7 @@
 // Formatting, filter-state serialisation, and the omnibox parser.
 
+import { store } from './store.js';
+
 export const NBSP = ' ';
 
 export function num(value) {
@@ -234,6 +236,69 @@ export function describeFilters(filters, catalog) {
     }
   }
   return out;
+}
+
+// ── Remembered scan scope ──────────────────────────────────────────────────
+// Once a project's targets (domains/IPs/CIDRs) are used to actually start a
+// scan or save a schedule — via "Run a scan" (scan.js) or "Add a schedule"
+// (schedule.js) — the other box should see them too, so the same list never
+// needs retyping or copy-pasting between the two. localStorage, not the
+// server: a per-browser convenience, same reasoning as `loadPersistedColumns`
+// in views.js, not a shared/authoritative setting worth a project column.
+// Lives here (rather than in scan.js, which schedule.js would otherwise need
+// to import) since scan.js already imports `ScheduleForm` from schedule.js —
+// importing back the other way would be circular.
+//
+// Two things this deliberately guards against, both surfaced by a user
+// rebuilding their dev container from scratch and finding a domain already
+// sitting in the box they'd never typed this time round:
+//
+//  1. The key is scoped to the *specific* backend project (slug + its
+//     `created_at`), not just its name. A slug can be reused after
+//     `docker compose down -v` — same name, brand-new project row, zero
+//     history — and without the timestamp, last cycle's scope would
+//     silently reappear against it, looking like the app somehow already
+//     knew a domain nobody entered this time.
+//  2. It's saved only at the moment a scan actually starts or a schedule is
+//     actually created — never on every keystroke — so merely typing
+//     something and abandoning it never gets remembered. "Manually
+//     configured" means committed, not typed.
+//
+// None of this ever leaves the browser: localStorage is a per-origin store
+// on disk on the machine running the browser, entirely separate from this
+// repo's files — nothing here can end up in a commit or a `git push`.
+function scopeStorageKey(key) {
+  return `frogscope:scanScope:${key}`;
+}
+
+/** `slug:created_at` for the project currently on the server, so a project
+ * recreated after a database wipe (same slug, new row) gets its own key
+ * rather than inheriting the last cycle's memory. Falls back to the bare
+ * slug if the project list can't be fetched (offline export, request
+ * failure) — degrades to the old, slightly looser behaviour rather than
+ * losing the feature entirely. */
+export async function scopeKeyFor(project) {
+  if (!project) return null;
+  try {
+    const rows = await store.projects();
+    const row = rows.find((p) => p.slug === project);
+    return row ? `${project}:${row.created_at}` : project;
+  } catch {
+    return project;
+  }
+}
+
+export function loadPersistedScope(key) {
+  if (!key) return '';
+  try { return localStorage.getItem(scopeStorageKey(key)) || ''; } catch { return ''; }
+}
+
+export function savePersistedScope(key, targets) {
+  if (!key) return;
+  try {
+    if (targets && targets.trim()) localStorage.setItem(scopeStorageKey(key), targets);
+    else localStorage.removeItem(scopeStorageKey(key));
+  } catch { /* private-browsing / storage disabled — scope just won't persist */ }
 }
 
 export function downloadText(filename, text, mime = 'text/plain') {

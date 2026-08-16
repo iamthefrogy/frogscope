@@ -10,7 +10,7 @@ import { h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import htm from 'htm';
 import { SNAP, store } from './store.js';
-import { when } from './lib.js';
+import { when, scopeKeyFor, loadPersistedScope, savePersistedScope } from './lib.js';
 import { CardTitle } from './help.js';
 
 const html = htm.bind(h);
@@ -21,6 +21,31 @@ const PRESETS = [
   ['weekly', 'Every week'],
 ];
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+// The device's own zone — what "09:35" means to whoever is sitting here
+// typing it, not the server's. `time_of_day` is interpreted against this
+// (scan/scheduler.py's `next_run_at`), so getting it wrong is the difference
+// between a schedule that fires when you meant it to and one that silently
+// fires hours off, which is exactly why this is auto-detected rather than
+// left for someone to notice UTC on a dropdown and get right by luck.
+function detectTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch { return 'UTC'; }
+}
+
+// A handful of common zones plus whatever the browser reports, deduplicated
+// — good enough for a dropdown without needing `Intl.supportedValuesOf`
+// (not available in every browser this SPA has to run in).
+function timezoneOptions(detected) {
+  const common = [
+    'UTC', 'Asia/Kolkata', 'Asia/Dubai', 'Asia/Singapore', 'Asia/Tokyo',
+    'Asia/Shanghai', 'Europe/London', 'Europe/Berlin', 'Europe/Moscow',
+    'America/New_York', 'America/Chicago', 'America/Denver',
+    'America/Los_Angeles', 'America/Sao_Paulo', 'Australia/Sydney',
+  ];
+  return [...new Set([detected, ...common])];
+}
 
 // ── Collision-aware scheduling ───────────────────────────────────────────
 //
@@ -40,11 +65,18 @@ const ALL_TIMES = [];
 for (let h = 0; h < 24; h++) for (const m of [0, 30]) ALL_TIMES.push(`${pad2(h)}:${pad2(m)}`);
 const TIME_CANDIDATES = [...QUIET_TIMES, ...ALL_TIMES.filter((t) => !QUIET_TIMES.includes(t))];
 
-function occupiedAt(schedules, time) {
+// `time_of_day` is only comparable between schedules that read it in the
+// same zone — "09:35" in Kolkata and "09:35" in London are ~5.5 hours apart,
+// not a collision, so cross-zone schedules are ignored here rather than
+// compared as if the strings meant the same instant. Old rows from before
+// the `timezone` column existed default to `'UTC'` (the migration's column
+// default), so they compare correctly against an explicit UTC pick too.
+function occupiedAt(schedules, time, timezone) {
   let allDays = false;
   const days = new Set();
   for (const s of schedules) {
     if (!s.enabled || s.time_of_day !== time) continue;
+    if ((s.timezone || 'UTC') !== (timezone || 'UTC')) continue;
     if (s.preset === 'daily') allDays = true;
     else if (s.preset === 'weekly') days.add(s.day_of_week ?? 0);
   }
@@ -53,9 +85,9 @@ function occupiedAt(schedules, time) {
 
 /** First non-colliding daily time, or the first quiet-hours time if every
  * candidate is already taken (better to still suggest something than none). */
-function suggestDailyTime(schedules) {
+function suggestDailyTime(schedules, timezone) {
   for (const t of TIME_CANDIDATES) {
-    const occ = occupiedAt(schedules, t);
+    const occ = occupiedAt(schedules, t, timezone);
     if (!occ.allDays && occ.days.size === 0) return { time: t, clashFree: true };
   }
   return { time: QUIET_TIMES[0], clashFree: false };
@@ -63,11 +95,11 @@ function suggestDailyTime(schedules) {
 
 /** First non-colliding (day, time) pair for a weekly schedule, trying the
  * caller's preferred day first before spreading to the rest of the week. */
-function suggestWeeklySlot(schedules, preferredDay) {
+function suggestWeeklySlot(schedules, preferredDay, timezone) {
   const order = [preferredDay, ...WEEKDAYS.map((_, i) => i).filter((i) => i !== preferredDay)];
   for (const day of order) {
     for (const t of TIME_CANDIDATES) {
-      const occ = occupiedAt(schedules, t);
+      const occ = occupiedAt(schedules, t, timezone);
       if (!occ.allDays && !occ.days.has(day)) return { day, time: t, clashFree: true };
     }
   }
@@ -95,6 +127,16 @@ export function SchedulePanel({ project }) {
   };
   useEffect(() => { refresh(); }, [project]);
 
+  // A schedule can fire on the scheduler's own clock with nobody watching —
+  // light polling is the only way this tab ever finds out, since nothing
+  // pushes it a "your unattended run just started" event. Cheap (one small
+  // SELECT) and only while this panel is actually open.
+  useEffect(() => {
+    if (SNAP || !project) return undefined;
+    const id = setInterval(refresh, 5000);
+    return () => clearInterval(id);
+  }, [project]);
+
   // Meaningless in the offline export: `fetch` is shimmed there, so this
   // would look live and silently do nothing — same reasoning as DangerZone.
   if (SNAP) return null;
@@ -114,7 +156,7 @@ export function SchedulePanel({ project }) {
       <table class="plain">
         <thead><tr>
           <th>Name</th><th>Targets</th><th>Cadence</th>
-          <th>Last run</th><th></th>
+          <th>Next run</th><th>Last run</th><th></th>
         </tr></thead>
         <tbody>${schedules.map((s) => html`
           <${ScheduleRow} schedule=${s} onChanged=${refresh} />`)}</tbody>
@@ -133,29 +175,69 @@ export function SchedulePanel({ project }) {
 }
 
 function cadenceText(s) {
-  return s.preset === 'weekly'
+  // Hourly has no `time_of_day`/timezone (only a minute-of-hour, matched the
+  // same instant in every zone) — see `next_run_at`'s docstring.
+  if (s.preset === 'hourly') return 'Hourly';
+  const base = s.preset === 'weekly'
     ? `Weekly, ${WEEKDAYS[s.day_of_week ?? 0]} ${s.time_of_day || ''}`
-    : s.preset === 'hourly' ? 'Hourly'
     : `Daily, ${s.time_of_day || ''}`;
+  return s.timezone ? `${base} (${s.timezone})` : base;
+}
+
+// `next_run_at` is stored in UTC (scan/scheduler.py) — shown here in the
+// schedule's own timezone, the one the user actually picked a time in, so
+// "next run" reads as the same clock they set rather than a UTC instant
+// they'd have to convert in their head to know if it's already overdue.
+function formatNextRun(s) {
+  if (!s.enabled) return 'paused';
+  if (!s.next_run_at) return '—';
+  const d = new Date(s.next_run_at);
+  if (Number.isNaN(d.getTime())) return s.next_run_at;
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      timeZone: s.timezone || 'UTC',
+      year: 'numeric', month: 'short', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(d);
+  } catch {
+    return `${when(s.next_run_at)} UTC`;
+  }
 }
 
 function ScheduleRow({ schedule: s, onChanged }) {
   const [busy, setBusy] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState('');
+  // `running` is this browser's own click; `s.running` is the scheduler's
+  // tick firing this schedule on its own clock, polled in from the server
+  // (SchedulePanel's 5s refresh) — either one means "show it as in
+  // progress", since neither alone covers both ways a run can start.
+  const isRunning = running || Boolean(s.running);
 
   const toggle = async () => {
-    setBusy(true);
+    setBusy(true); setError('');
     try { await store.updateSchedule(s.id, { enabled: !s.enabled }); onChanged(); }
+    catch (e) { setError(e.message); }
     finally { setBusy(false); }
   };
+  // `run-now` runs the scan inline on the server (routes.py) — this can take
+  // minutes, so the button needs its own "Running…" state rather than just
+  // `busy`, or a slow run looks identical to a click that did nothing. And
+  // without the try/catch this used to be missing, a rejected request (slot
+  // held by another scan, tools not installed, etc) failed completely
+  // silently: `busy` still got reset in `finally`, so the button just
+  // re-enabled with no sign anything had gone wrong.
   const runNow = async () => {
-    setBusy(true);
+    setBusy(true); setRunning(true); setError('');
     try { await store.runScheduleNow(s.id); onChanged(); }
-    finally { setBusy(false); }
+    catch (e) { setError(e.message); }
+    finally { setBusy(false); setRunning(false); }
   };
   const remove = async () => {
     if (!confirm(`Delete the "${s.name}" schedule?`)) return;
-    setBusy(true);
+    setBusy(true); setError('');
     try { await store.deleteSchedule(s.id); onChanged(); }
+    catch (e) { setError(e.message); }
     finally { setBusy(false); }
   };
 
@@ -170,12 +252,16 @@ function ScheduleRow({ schedule: s, onChanged }) {
       ${(s.targets || []).slice(0, 2).join(', ')}${(s.targets || []).length > 2 ? '…' : ''}
     </td>
     <td>${cadence}</td>
+    <td class="subtle nowrap">${formatNextRun(s)}</td>
     <td class="subtle nowrap">
       ${s.last_run_at ? when(s.last_run_at) : 'never'}
       ${s.last_skip_reason ? html`<div><span class="chip" data-state="warn" title=${s.last_skip_reason}>skipped</span></div>` : null}
+      ${error ? html`<div><span class="chip" data-state="bad" title=${error}>run failed</span></div>` : null}
     </td>
     <td class="right" style="white-space:nowrap">
-      <button class="btn btn-sm" disabled=${busy} onClick=${runNow}>Run now</button>
+      <button class=${isRunning ? 'btn btn-sm btn-warn' : 'btn btn-sm'}
+        disabled=${busy || isRunning} onClick=${runNow}>
+        ${isRunning ? 'In progress…' : 'Run now'}</button>
       <button class="btn btn-sm" disabled=${busy} onClick=${toggle}>${s.enabled ? 'Pause' : 'Resume'}</button>
       <button class="btn btn-sm btn-danger" disabled=${busy} onClick=${remove}>Delete</button>
     </td>
@@ -188,6 +274,10 @@ function ScheduleRow({ schedule: s, onChanged }) {
 // initial state — editing them here doesn't reach back to the caller, same
 // one-way relationship `SchedulePanel`'s own standalone use of this form
 // already has with nothing.
+// When there's no caller to hand targets over directly (`SchedulePanel`'s
+// own "Add a schedule…"), fall back to the same remembered scope "Run a
+// scan" prefills itself from — the two boxes share one memory now, so the
+// same domain/IP list never needs retyping or copy-pasting between them.
 export function ScheduleForm({ project, onCreated, onCancel,
                               initialTargets, initialProfile, initialAuthorised }) {
   const [name, setName] = useState('');
@@ -196,9 +286,28 @@ export function ScheduleForm({ project, onCreated, onCancel,
   const [preset, setPreset] = useState('daily');
   const [timeOfDay, setTimeOfDay] = useState('03:00');
   const [dayOfWeek, setDayOfWeek] = useState(0);
+  const [timezone, setTimezone] = useState(detectTimezone());
   const [authorised, setAuthorised] = useState(Boolean(initialAuthorised));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  // The remembered-scope key for this specific backend project (slug + its
+  // `created_at`, so a project recreated after a database wipe doesn't
+  // inherit a previous cycle's memory — see `scopeKeyFor` in lib.js). Only
+  // used to prefill when the caller hasn't already handed targets over
+  // directly; always resolved, though, so a successful save below can use it
+  // even in the `initialTargets` case.
+  const [scopeKey, setScopeKey] = useState(null);
+  useEffect(() => {
+    if (!project) return;
+    let cancelled = false;
+    scopeKeyFor(project).then((key) => {
+      if (cancelled) return;
+      setScopeKey(key);
+      if (!initialTargets) setTargets((prev) => prev || loadPersistedScope(key));
+    });
+    return () => { cancelled = true; };
+  }, [project]);
 
   // Every schedule across every project, fetched once — used to recommend a
   // day/time that doesn't collide with anything already scheduled. Manually
@@ -217,22 +326,22 @@ export function ScheduleForm({ project, onCreated, onCancel,
     if (!allSchedules) return;
     let next;
     if (preset === 'hourly') next = suggestHourlyMinute(allSchedules);
-    else if (preset === 'weekly') next = suggestWeeklySlot(allSchedules, Number(dayOfWeek));
-    else next = suggestDailyTime(allSchedules);
+    else if (preset === 'weekly') next = suggestWeeklySlot(allSchedules, Number(dayOfWeek), timezone);
+    else next = suggestDailyTime(allSchedules, timezone);
     setSuggestion(next);
     if (!timeTouched) setTimeOfDay(next.time);
     if (preset === 'weekly' && !dayTouched && next.day !== undefined) setDayOfWeek(next.day);
-    // Re-suggest whenever the cadence changes, or once schedules arrive —
+    // Re-suggest whenever the cadence, timezone, or schedule list changes —
     // deliberately not reacting to `dayOfWeek`/`timeOfDay` themselves, or a
     // user's own edit would immediately get recomputed out from under them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preset, allSchedules]);
+  }, [preset, allSchedules, timezone]);
 
   // A user picking a different day (weekly only) should re-suggest the time
   // for *that* day, without touching the day they just chose themselves.
   useEffect(() => {
     if (!allSchedules || preset !== 'weekly' || !dayTouched) return;
-    const next = suggestWeeklySlot(allSchedules, Number(dayOfWeek));
+    const next = suggestWeeklySlot(allSchedules, Number(dayOfWeek), timezone);
     setSuggestion(next);
     if (!timeTouched) setTimeOfDay(next.time);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -260,9 +369,13 @@ export function ScheduleForm({ project, onCreated, onCancel,
         preset,
         time_of_day: timeOfDay,
         day_of_week: preset === 'weekly' ? Number(dayOfWeek) : null,
+        timezone,
         authorised,
         subfinder: true,
       });
+      // Remembered only now — the schedule was actually, deliberately saved
+      // with this scope, not merely typed and possibly abandoned.
+      savePersistedScope(scopeKey || project, targets);
       onCreated();
     } catch (err) {
       setError(err.message);
@@ -297,13 +410,22 @@ export function ScheduleForm({ project, onCreated, onCancel,
         onChange=${(e) => { setDayOfWeek(e.target.value); setDayTouched(true); }}>
         ${WEEKDAYS.map((d, i) => html`<option value=${i}>${d}</option>`)}
       </select>` : null}
+      ${preset !== 'hourly' ? html`<select class="input" value=${timezone}
+        onChange=${(e) => setTimezone(e.target.value)}>
+        ${timezoneOptions(timezone).map((z) => html`<option value=${z}>${z}</option>`)}
+      </select>` : null}
     </div>
+
+    ${preset !== 'hourly' ? html`<p class="subtle" style="margin:0">
+      Detected from this device: <strong>${detectTimezone()}</strong> — change the zone above
+      if this schedule is for a server or team somewhere else.
+    </p>` : null}
 
     ${suggestion ? html`<p class="subtle" style="margin:0">
       ${suggestion.clashFree
-        ? html`Recommended slot, clear of every other schedule: <strong>${
+        ? html`Recommended slot, clear of every other schedule in this zone: <strong>${
             preset === 'weekly' ? `${WEEKDAYS[suggestion.day]} ` : ''}${suggestion.time}</strong>.`
-        : html`Every quiet slot is already taken — closest pick: <strong>${
+        : html`Every quiet slot in this zone is already taken — closest pick: <strong>${
             preset === 'weekly' ? `${WEEKDAYS[suggestion.day]} ` : ''}${suggestion.time}</strong>,
             still overlaps something.`}
       ${(timeTouched || dayTouched)
@@ -340,6 +462,15 @@ export function ScheduleSummaryView() {
   };
   useEffect(() => { refresh(); }, []);
 
+  // Same reasoning as `SchedulePanel`'s poll: a schedule can start on its
+  // own clock with nobody watching, and this is the only way this tab finds
+  // out short of a manual reload.
+  useEffect(() => {
+    if (SNAP) return undefined;
+    const id = setInterval(refresh, 5000);
+    return () => clearInterval(id);
+  }, []);
+
   if (SNAP) return html`<div class="view-scroll"><div class="empty">
     <p class="muted">Not available in the offline export.</p>
   </div></div>`;
@@ -357,7 +488,7 @@ export function ScheduleSummaryView() {
     ${schedules && schedules.length ? html`<div class="scroll-x">
       <table class="plain">
         <thead><tr>
-          <th>Project</th><th>Schedule</th><th>Cadence</th><th>Last run</th>
+          <th>Project</th><th>Schedule</th><th>Cadence</th><th>Next run</th><th>Last run</th>
         </tr></thead>
         <tbody>${schedules.map((s) => html`<tr>
           <td>${s.project_name}</td>
@@ -366,6 +497,7 @@ export function ScheduleSummaryView() {
             ${!s.enabled ? html`<span class="chip" data-state="neutral" style="margin-left:6px">paused</span>` : null}
           </td>
           <td>${cadenceText(s)}</td>
+          <td class="subtle nowrap">${formatNextRun(s)}</td>
           <td class="subtle nowrap">
             ${s.last_run_at ? when(s.last_run_at) : 'never'}
             ${s.last_skip_reason ? html`<div><span class="chip" data-state="warn" title=${s.last_skip_reason}>skipped</span></div>` : null}

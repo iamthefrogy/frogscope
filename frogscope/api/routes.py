@@ -466,12 +466,19 @@ _PRESETS = ("hourly", "daily", "weekly")
 
 
 def _schedule_row_to_dict(row) -> dict:
+    from ..scan.scheduler import is_running
+
     out = dict(row)
     for key in ("targets_json", "flags_json", "correlate_json"):
         try:
             out[key.removesuffix("_json")] = json.loads(out.pop(key) or "null")
         except json.JSONDecodeError:
             out[key.removesuffix("_json")] = None
+    # Whether the scheduler's own tick has this one mid-run right now — the
+    # signal schedule.js needs to show "running" for a fire nobody in the
+    # browser clicked, not just the one a "Run now" click already gets from
+    # its own outstanding request.
+    out["running"] = is_running(out["id"])
     return out
 
 
@@ -502,6 +509,8 @@ def list_schedules_route(slug: str):
 
 @api.post("/projects/<slug>/schedules")
 def create_schedule_route(slug: str):
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
     from ..ingest.store import get_schedule, insert_schedule
     from ..scan import OptionError
     from ..scan import options as scan_options
@@ -527,6 +536,16 @@ def create_schedule_route(slug: str):
     preset = str(payload.get("preset") or "daily")
     if preset not in _PRESETS:
         return jsonify({"error": f"preset must be one of {_PRESETS}"}), 400
+
+    # `time_of_day` is meaningless without knowing which clock it's read on
+    # — the browser sends its own IANA zone (schedule.js detects it via
+    # `Intl.DateTimeFormat().resolvedOptions().timeZone`), defaulting to UTC
+    # only if that's somehow missing.
+    timezone = str(payload.get("timezone") or "UTC").strip() or "UTC"
+    try:
+        ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        return jsonify({"error": f"unrecognised timezone {timezone!r}"}), 400
 
     # No per-schedule approval cap — an unattended run auto-approves
     # everything it finds, same as a manual scan does once past the
@@ -568,9 +587,10 @@ def create_schedule_route(slug: str):
         "preset": preset,
         "time_of_day": payload.get("time_of_day"),
         "day_of_week": int(day_of_week) if day_of_week is not None else None,
+        "timezone": timezone,
         "max_hosts_cap": max_hosts_cap,
         "enabled": payload.get("enabled", True),
-        "next_run_at": next_run_at(preset, payload.get("time_of_day"), day_of_week),
+        "next_run_at": next_run_at(preset, payload.get("time_of_day"), day_of_week, timezone),
     })
     conn.commit()
     row = get_schedule(conn, schedule_id)
@@ -599,16 +619,25 @@ def modify_schedule_route(schedule_id: int):
         fields["name"] = str(payload["name"]).strip()
     if "enabled" in payload:
         fields["enabled"] = int(bool(payload["enabled"]))
-    if "preset" in payload or "time_of_day" in payload or "day_of_week" in payload:
+    if ("preset" in payload or "time_of_day" in payload
+            or "day_of_week" in payload or "timezone" in payload):
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
         preset = payload.get("preset", existing["preset"])
         time_of_day = payload.get("time_of_day", existing["time_of_day"])
         day_of_week = payload.get("day_of_week", existing["day_of_week"])
+        timezone = payload.get("timezone", existing["timezone"])
         if preset not in _PRESETS:
             return jsonify({"error": f"preset must be one of {_PRESETS}"}), 400
+        try:
+            ZoneInfo(timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            return jsonify({"error": f"unrecognised timezone {timezone!r}"}), 400
         fields["preset"] = preset
         fields["time_of_day"] = time_of_day
         fields["day_of_week"] = day_of_week
-        fields["next_run_at"] = next_run_at(preset, time_of_day, day_of_week)
+        fields["timezone"] = timezone
+        fields["next_run_at"] = next_run_at(preset, time_of_day, day_of_week, timezone)
 
     update_schedule(conn, schedule_id, fields)
     conn.commit()

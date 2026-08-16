@@ -18,7 +18,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import htm from 'htm';
 import { SNAP, store } from './store.js';
 import { CardTitle, Help } from './help.js';
-import { num } from './lib.js';
+import { num, scopeKeyFor, loadPersistedScope, savePersistedScope } from './lib.js';
 import { takePendingScanTargets } from './discovered.js';
 import { ScheduleForm } from './schedule.js';
 
@@ -59,6 +59,8 @@ export function ScanPanel({ project, onIngested, embedded }) {
   const [job, setJob] = useState(null);
   const [error, setError] = useState('');
   const poll = useRef(null);
+  const consumedPending = useRef(false);
+  const [scopeKey, setScopeKey] = useState(null);
 
   useEffect(() => {
     if (SNAP) return;
@@ -76,15 +78,37 @@ export function ScanPanel({ project, onIngested, embedded }) {
       const live = list.find((s) => ACTIVE.includes(s.state));
       if (live) setJob(live);
     }).catch(() => {});
-
-    // Names queued from the "Newly discovered" tab (v2) — added with
-    // consent, one click at a time there, prefilled here rather than
-    // auto-probed the moment they were found.
-    const pending = takePendingScanTargets();
-    if (pending.length) {
-      setTargets((prev) => (prev ? `${prev}\n${pending.join('\n')}` : pending.join('\n')));
-    }
   }, []);
+
+  // Loads this project's remembered scope the moment it's chosen (including
+  // on the very first render) rather than only at mount — `ScanPanel` is a
+  // single long-lived instance reused across every project the picker above
+  // it switches to, not remounted per project. The lookup is async (the key
+  // is tied to this specific project row's `created_at`, not just its slug —
+  // see `scopeKeyFor` in lib.js), so a project recreated after a database
+  // wipe never inherits a previous cycle's memory.
+  useEffect(() => {
+    if (!project) { setScopeKey(null); return; }
+    let cancelled = false;
+    scopeKeyFor(project).then((key) => {
+      if (cancelled) return;
+      setScopeKey(key);
+      setTargets(loadPersistedScope(key));
+
+      // Names queued from the "Newly discovered" tab (v2) — added with
+      // consent, one click at a time there, appended to the remembered
+      // scope rather than replacing it. Only ever consumed once per visit
+      // to this panel, same as before.
+      if (!consumedPending.current) {
+        consumedPending.current = true;
+        const pending = takePendingScanTargets();
+        if (pending.length) {
+          setTargets((prev) => (prev ? `${prev}\n${pending.join('\n')}` : pending.join('\n')));
+        }
+      }
+    });
+    return () => { cancelled = true; };
+  }, [project]);
 
   // Poll while anything is in flight, and stop as soon as it is not.
   useEffect(() => {
@@ -119,6 +143,9 @@ export function ScanPanel({ project, onIngested, embedded }) {
         rate_limit: Number(rateLimit),
       });
       setJob({ ...started, state: 'running', progress: {} });
+      // Remembered only now — the scan was actually, deliberately started
+      // with this scope, not merely typed and possibly abandoned.
+      savePersistedScope(scopeKey || project, targets);
     } catch (e) {
       setError(e.message);
     }
